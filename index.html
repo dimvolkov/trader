@@ -119,6 +119,15 @@
             <span class="price" id="currentPrice">--</span>
             <span class="change" id="priceChange">--</span>
         </div>
+        <div class="controls timeframes">
+            <button data-tf="1" class="active">1м</button>
+            <button data-tf="15">15м</button>
+            <button data-tf="30">30м</button>
+            <button data-tf="60">1ч</button>
+            <button data-tf="W">1Н</button>
+            <button data-tf="M">1М</button>
+            <button data-tf="Y">1Г</button>
+        </div>
         <div class="controls">
             <button data-type="line">Line</button>
             <button data-type="candle" class="active">Candle</button>
@@ -187,6 +196,17 @@
         let currentCandle = null;
         let openPrice = null;
         let chartType = 'candle';
+        let currentTF = '1'; // resolution
+
+        const TF_CONFIG = {
+            '1':  { seconds: 60,       historySpan: 24 * 3600,       resolution: '1',  label: '1м' },
+            '15': { seconds: 15 * 60,  historySpan: 7 * 24 * 3600,   resolution: '15', label: '15м' },
+            '30': { seconds: 30 * 60,  historySpan: 14 * 24 * 3600,  resolution: '30', label: '30м' },
+            '60': { seconds: 3600,     historySpan: 30 * 24 * 3600,  resolution: '60', label: '1ч' },
+            'W':  { seconds: 7 * 24 * 3600,  historySpan: 365 * 24 * 3600,     resolution: 'W', label: '1Н' },
+            'M':  { seconds: 30 * 24 * 3600, historySpan: 3 * 365 * 24 * 3600, resolution: 'M', label: '1М' },
+            'Y':  { seconds: 365 * 24 * 3600, historySpan: 20 * 365 * 24 * 3600, resolution: 'M', label: '1Г' },
+        };
 
         // --- UI refs ---
         const priceEl = document.getElementById('currentPrice');
@@ -197,13 +217,28 @@
         const overlay = document.getElementById('overlay');
 
         // --- Chart type toggle ---
-        document.querySelectorAll('.controls button').forEach(btn => {
+        document.querySelectorAll('.controls:not(.timeframes) button').forEach(btn => {
             btn.addEventListener('click', () => {
-                document.querySelector('.controls .active').classList.remove('active');
+                document.querySelector('.controls:not(.timeframes) .active').classList.remove('active');
                 btn.classList.add('active');
                 chartType = btn.dataset.type;
                 candleSeries.applyOptions({ visible: chartType === 'candle' });
                 lineSeries.applyOptions({ visible: chartType === 'line' });
+            });
+        });
+
+        // --- Timeframe toggle ---
+        document.querySelectorAll('.timeframes button').forEach(btn => {
+            btn.addEventListener('click', () => {
+                document.querySelector('.timeframes .active').classList.remove('active');
+                btn.classList.add('active');
+                currentTF = btn.dataset.tf;
+                currentCandle = null;
+                if (FINNHUB_API_KEY === 'demo') {
+                    generateDemoData();
+                } else {
+                    loadHistory();
+                }
             });
         });
 
@@ -225,9 +260,9 @@
         }
 
         function getCandleTime(ts) {
-            // 1-minute candles
             const sec = Math.floor(ts / 1000);
-            return sec - (sec % 60);
+            const tf = TF_CONFIG[currentTF];
+            return sec - (sec % tf.seconds);
         }
 
         function handleTick(price, timestamp) {
@@ -260,9 +295,10 @@
         // Load historical candles via REST
         async function loadHistory() {
             try {
+                const tf = TF_CONFIG[currentTF];
                 const to = Math.floor(Date.now() / 1000);
-                const from = to - 24 * 60 * 60; // 24h
-                const url = `https://finnhub.io/api/v1/forex/candle?symbol=${SYMBOL}&resolution=1&from=${from}&to=${to}&token=${FINNHUB_API_KEY}`;
+                const from = to - tf.historySpan;
+                const url = `https://finnhub.io/api/v1/forex/candle?symbol=${SYMBOL}&resolution=${tf.resolution}&from=${from}&to=${to}&token=${FINNHUB_API_KEY}`;
                 const res = await fetch(url);
                 const data = await res.json();
                 if (data.s === 'ok' && data.t) {
@@ -365,25 +401,26 @@
         }
 
         // --- Generate demo data if no API key ---
-        function startDemo() {
-            overlay.classList.add('hidden');
-            statusDot.className = 'status-dot connected';
-            statusText.textContent = 'Demo mode';
+        let demoPrice = 88.50 + Math.random() * 2;
+        let demoTickTimer = null;
 
-            let price = 88.50 + Math.random() * 2;
-            openPrice = price;
+        function generateDemoData() {
+            const tf = TF_CONFIG[currentTF];
             const now = Math.floor(Date.now() / 1000);
-            const startTime = now - 3600;
+            const startTime = now - tf.historySpan;
+            const step = tf.seconds;
 
-            // Generate 1h of historical 1-min candles
+            // Scale volatility to timeframe
+            const baseVol = 0.15 * Math.sqrt(step / 60);
+
             const candles = [];
             const lineData = [];
-            let p = price - 1 + Math.random() * 2;
-            for (let t = startTime; t < now; t += 60) {
+            let p = demoPrice - 1 + Math.random() * 2;
+            for (let t = startTime; t < now; t += step) {
                 const o = p;
-                const movement = (Math.random() - 0.48) * 0.15;
-                const h = o + Math.abs(movement) + Math.random() * 0.08;
-                const l = o - Math.abs(movement) - Math.random() * 0.08;
+                const movement = (Math.random() - 0.48) * baseVol;
+                const h = o + Math.abs(movement) + Math.random() * baseVol * 0.5;
+                const l = o - Math.abs(movement) - Math.random() * baseVol * 0.5;
                 p = o + movement;
                 candles.push({ time: t, open: o, high: h, low: l, close: p });
                 lineData.push({ time: t, value: p });
@@ -391,13 +428,23 @@
             candleSeries.setData(candles);
             lineSeries.setData(lineData);
             currentCandle = candles[candles.length - 1];
+            openPrice = candles[0].open;
+            demoPrice = p;
             updatePrice(p);
+        }
+
+        function startDemo() {
+            overlay.classList.add('hidden');
+            statusDot.className = 'status-dot connected';
+            statusText.textContent = 'Demo mode';
+
+            generateDemoData();
 
             // Simulate live ticks
-            setInterval(() => {
+            demoTickTimer = setInterval(() => {
                 const volatility = 0.03 + Math.random() * 0.05;
-                price += (Math.random() - 0.48) * volatility;
-                handleTick(price, Date.now());
+                demoPrice += (Math.random() - 0.48) * volatility;
+                handleTick(demoPrice, Date.now());
             }, 800 + Math.random() * 400);
         }
 
