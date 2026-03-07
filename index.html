@@ -197,6 +197,7 @@
         let openPrice = null;
         let chartType = 'candle';
         let currentTF = '1'; // resolution
+        let priceLines = [];
 
         const TF_CONFIG = {
             '1':  { seconds: 60,       historySpan: 24 * 3600,       resolution: '1',  label: '1м' },
@@ -321,6 +322,7 @@
                         openPrice = candles[0].open;
                         currentCandle = last;
                         updatePrice(last.close);
+                        drawSupportResistance(candles);
                     }
                     return true;
                 }
@@ -400,6 +402,67 @@
             };
         }
 
+        // --- Support & Resistance levels ---
+        function clearPriceLines() {
+            priceLines.forEach(pl => candleSeries.removePriceLine(pl));
+            priceLines = [];
+        }
+
+        function findSupportResistance(candles) {
+            if (candles.length < 5) return [];
+            const lookback = Math.max(3, Math.floor(candles.length * 0.03));
+            const levels = [];
+
+            for (let i = lookback; i < candles.length - lookback; i++) {
+                let isResistance = true;
+                let isSupport = true;
+                for (let j = 1; j <= lookback; j++) {
+                    if (candles[i].high <= candles[i - j].high || candles[i].high <= candles[i + j].high) {
+                        isResistance = false;
+                    }
+                    if (candles[i].low >= candles[i - j].low || candles[i].low >= candles[i + j].low) {
+                        isSupport = false;
+                    }
+                }
+                if (isResistance) levels.push({ price: candles[i].high, type: 'resistance' });
+                if (isSupport) levels.push({ price: candles[i].low, type: 'support' });
+            }
+
+            // Cluster nearby levels (merge within 0.15% of each other)
+            levels.sort((a, b) => a.price - b.price);
+            const merged = [];
+            for (const lvl of levels) {
+                const last = merged[merged.length - 1];
+                if (last && Math.abs(lvl.price - last.price) / last.price < 0.0015) {
+                    last.price = (last.price + lvl.price) / 2;
+                    last.count++;
+                } else {
+                    merged.push({ ...lvl, count: 1 });
+                }
+            }
+
+            // Keep top levels by strength (touch count), max 4 support + 4 resistance
+            const supports = merged.filter(l => l.type === 'support').sort((a, b) => b.count - a.count).slice(0, 4);
+            const resistances = merged.filter(l => l.type === 'resistance').sort((a, b) => b.count - a.count).slice(0, 4);
+            return [...supports, ...resistances];
+        }
+
+        function drawSupportResistance(candles) {
+            clearPriceLines();
+            const levels = findSupportResistance(candles);
+            levels.forEach(lvl => {
+                const pl = candleSeries.createPriceLine({
+                    price: lvl.price,
+                    color: lvl.type === 'support' ? '#26a69a' : '#ef5350',
+                    lineWidth: 1,
+                    lineStyle: LightweightCharts.LineStyle.Dashed,
+                    axisLabelVisible: true,
+                    title: lvl.type === 'support' ? 'S' : 'R',
+                });
+                priceLines.push(pl);
+            });
+        }
+
         // --- Generate demo data if no API key ---
         let demoPrice = 88.50 + Math.random() * 2;
         let demoTickTimer = null;
@@ -431,6 +494,7 @@
             openPrice = candles[0].open;
             demoPrice = p;
             updatePrice(p);
+            drawSupportResistance(candles);
         }
 
         function startDemo() {
