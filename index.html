@@ -1,0 +1,421 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>USD/RUB Forex Chart</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            background: #131722;
+            color: #d1d4dc;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+        }
+        .header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 12px 20px;
+            background: #1e222d;
+            border-bottom: 1px solid #2a2e39;
+        }
+        .pair-info {
+            display: flex;
+            align-items: center;
+            gap: 16px;
+        }
+        .pair-name {
+            font-size: 20px;
+            font-weight: 700;
+            color: #fff;
+        }
+        .price {
+            font-size: 24px;
+            font-weight: 700;
+            transition: color 0.3s;
+        }
+        .price.up { color: #26a69a; }
+        .price.down { color: #ef5350; }
+        .change {
+            font-size: 14px;
+            padding: 3px 8px;
+            border-radius: 4px;
+        }
+        .change.up { background: rgba(38,166,154,0.15); color: #26a69a; }
+        .change.down { background: rgba(239,83,80,0.15); color: #ef5350; }
+        .controls {
+            display: flex;
+            gap: 8px;
+        }
+        .controls button {
+            background: #2a2e39;
+            color: #d1d4dc;
+            border: 1px solid #363a45;
+            padding: 6px 14px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 13px;
+            transition: background 0.2s;
+        }
+        .controls button:hover { background: #363a45; }
+        .controls button.active {
+            background: #2962ff;
+            border-color: #2962ff;
+            color: #fff;
+        }
+        .chart-container {
+            flex: 1;
+            position: relative;
+        }
+        .status-bar {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 6px 20px;
+            background: #1e222d;
+            border-top: 1px solid #2a2e39;
+            font-size: 12px;
+            color: #787b86;
+        }
+        .status-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: #ef5350;
+        }
+        .status-dot.connected { background: #26a69a; }
+        .overlay {
+            position: absolute;
+            inset: 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: rgba(19,23,34,0.85);
+            z-index: 10;
+        }
+        .overlay.hidden { display: none; }
+        .overlay-content {
+            text-align: center;
+        }
+        .spinner {
+            width: 40px;
+            height: 40px;
+            border: 3px solid #2a2e39;
+            border-top-color: #2962ff;
+            border-radius: 50%;
+            animation: spin 0.8s linear infinite;
+            margin: 0 auto 12px;
+        }
+        @keyframes spin { to { transform: rotate(360deg); } }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <div class="pair-info">
+            <span class="pair-name">USD / RUB</span>
+            <span class="price" id="currentPrice">--</span>
+            <span class="change" id="priceChange">--</span>
+        </div>
+        <div class="controls">
+            <button data-type="line">Line</button>
+            <button data-type="candle" class="active">Candle</button>
+        </div>
+    </div>
+    <div class="chart-container" id="chartContainer">
+        <div class="overlay" id="overlay">
+            <div class="overlay-content">
+                <div class="spinner"></div>
+                <div>Connecting...</div>
+            </div>
+        </div>
+    </div>
+    <div class="status-bar">
+        <div class="status-dot" id="statusDot"></div>
+        <span id="statusText">Disconnected</span>
+        <span style="margin-left: auto" id="lastUpdate">--</span>
+    </div>
+
+    <script src="https://unpkg.com/lightweight-charts@4.1.1/dist/lightweight-charts.standalone.production.js"></script>
+    <script>
+    (function() {
+        const FINNHUB_API_KEY = 'demo';
+        const SYMBOL = 'OANDA:USD_RUB';
+        const POLL_INTERVAL = 3000;
+
+        // --- Chart setup ---
+        const container = document.getElementById('chartContainer');
+        const chart = LightweightCharts.createChart(container, {
+            layout: { background: { color: '#131722' }, textColor: '#d1d4dc' },
+            grid: {
+                vertLines: { color: '#1e222d' },
+                horzLines: { color: '#1e222d' },
+            },
+            crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
+            rightPriceScale: { borderColor: '#2a2e39' },
+            timeScale: {
+                borderColor: '#2a2e39',
+                timeVisible: true,
+                secondsVisible: false,
+            },
+        });
+
+        const candleSeries = chart.addCandlestickSeries({
+            upColor: '#26a69a',
+            downColor: '#ef5350',
+            borderDownColor: '#ef5350',
+            borderUpColor: '#26a69a',
+            wickDownColor: '#ef5350',
+            wickUpColor: '#26a69a',
+        });
+
+        const lineSeries = chart.addLineSeries({
+            color: '#2962ff',
+            lineWidth: 2,
+            visible: false,
+        });
+
+        // Resize
+        const ro = new ResizeObserver(() => {
+            chart.applyOptions({ width: container.clientWidth, height: container.clientHeight });
+        });
+        ro.observe(container);
+
+        // --- State ---
+        let currentCandle = null;
+        let openPrice = null;
+        let chartType = 'candle';
+
+        // --- UI refs ---
+        const priceEl = document.getElementById('currentPrice');
+        const changeEl = document.getElementById('priceChange');
+        const statusDot = document.getElementById('statusDot');
+        const statusText = document.getElementById('statusText');
+        const lastUpdateEl = document.getElementById('lastUpdate');
+        const overlay = document.getElementById('overlay');
+
+        // --- Chart type toggle ---
+        document.querySelectorAll('.controls button').forEach(btn => {
+            btn.addEventListener('click', () => {
+                document.querySelector('.controls .active').classList.remove('active');
+                btn.classList.add('active');
+                chartType = btn.dataset.type;
+                candleSeries.applyOptions({ visible: chartType === 'candle' });
+                lineSeries.applyOptions({ visible: chartType === 'line' });
+            });
+        });
+
+        function updatePrice(price) {
+            priceEl.textContent = price.toFixed(4);
+            if (openPrice !== null) {
+                const diff = price - openPrice;
+                const pct = (diff / openPrice * 100).toFixed(2);
+                const up = diff >= 0;
+                priceEl.className = 'price ' + (up ? 'up' : 'down');
+                changeEl.className = 'change ' + (up ? 'up' : 'down');
+                changeEl.textContent = `${up ? '+' : ''}${diff.toFixed(4)} (${up ? '+' : ''}${pct}%)`;
+            }
+            lastUpdateEl.textContent = new Date().toLocaleTimeString();
+        }
+
+        function toChartTime(ts) {
+            return Math.floor(ts / 1000);
+        }
+
+        function getCandleTime(ts) {
+            // 1-minute candles
+            const sec = Math.floor(ts / 1000);
+            return sec - (sec % 60);
+        }
+
+        function handleTick(price, timestamp) {
+            const time = getCandleTime(timestamp);
+
+            if (!currentCandle || currentCandle.time !== time) {
+                currentCandle = { time, open: price, high: price, low: price, close: price };
+            } else {
+                currentCandle.close = price;
+                currentCandle.high = Math.max(currentCandle.high, price);
+                currentCandle.low = Math.min(currentCandle.low, price);
+            }
+
+            candleSeries.update(currentCandle);
+            lineSeries.update({ time, value: price });
+            updatePrice(price);
+        }
+
+        // --- Connection: WebSocket with REST fallback ---
+        function setStatus(connected) {
+            statusDot.className = 'status-dot' + (connected ? ' connected' : '');
+            statusText.textContent = connected ? 'Connected (realtime)' : 'Disconnected';
+        }
+
+        function setStatusPolling() {
+            statusDot.className = 'status-dot connected';
+            statusText.textContent = 'Connected (polling)';
+        }
+
+        // Load historical candles via REST
+        async function loadHistory() {
+            try {
+                const to = Math.floor(Date.now() / 1000);
+                const from = to - 24 * 60 * 60; // 24h
+                const url = `https://finnhub.io/api/v1/forex/candle?symbol=${SYMBOL}&resolution=1&from=${from}&to=${to}&token=${FINNHUB_API_KEY}`;
+                const res = await fetch(url);
+                const data = await res.json();
+                if (data.s === 'ok' && data.t) {
+                    const candles = [];
+                    const lineData = [];
+                    for (let i = 0; i < data.t.length; i++) {
+                        candles.push({
+                            time: data.t[i],
+                            open: data.o[i],
+                            high: data.h[i],
+                            low: data.l[i],
+                            close: data.c[i],
+                        });
+                        lineData.push({ time: data.t[i], value: data.c[i] });
+                    }
+                    candleSeries.setData(candles);
+                    lineSeries.setData(lineData);
+                    if (candles.length > 0) {
+                        const last = candles[candles.length - 1];
+                        openPrice = candles[0].open;
+                        currentCandle = last;
+                        updatePrice(last.close);
+                    }
+                    return true;
+                }
+            } catch (e) {
+                console.warn('History load failed:', e);
+            }
+            return false;
+        }
+
+        // REST polling fallback
+        let pollTimer = null;
+        async function pollQuote() {
+            try {
+                const url = `https://finnhub.io/api/v1/quote?symbol=${SYMBOL}&token=${FINNHUB_API_KEY}`;
+                const res = await fetch(url);
+                const data = await res.json();
+                if (data.c) {
+                    handleTick(data.c, Date.now());
+                }
+            } catch (e) {
+                console.warn('Poll failed:', e);
+            }
+        }
+
+        function startPolling() {
+            setStatusPolling();
+            pollQuote();
+            pollTimer = setInterval(pollQuote, POLL_INTERVAL);
+        }
+
+        function stopPolling() {
+            if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+        }
+
+        // WebSocket realtime
+        let ws = null;
+        let wsRetries = 0;
+
+        function connectWebSocket() {
+            try {
+                ws = new WebSocket(`wss://ws.finnhub.io?token=${FINNHUB_API_KEY}`);
+            } catch (e) {
+                console.warn('WS init failed, falling back to polling');
+                startPolling();
+                return;
+            }
+
+            ws.onopen = () => {
+                wsRetries = 0;
+                stopPolling();
+                setStatus(true);
+                overlay.classList.add('hidden');
+                ws.send(JSON.stringify({ type: 'subscribe', symbol: SYMBOL }));
+            };
+
+            ws.onmessage = (event) => {
+                const msg = JSON.parse(event.data);
+                if (msg.type === 'trade' && msg.data) {
+                    msg.data.forEach(trade => {
+                        handleTick(trade.p, trade.t);
+                    });
+                }
+            };
+
+            ws.onclose = () => {
+                setStatus(false);
+                if (wsRetries < 5) {
+                    wsRetries++;
+                    setTimeout(connectWebSocket, 2000 * wsRetries);
+                } else {
+                    startPolling();
+                }
+            };
+
+            ws.onerror = () => {
+                ws.close();
+            };
+        }
+
+        // --- Generate demo data if no API key ---
+        function startDemo() {
+            overlay.classList.add('hidden');
+            statusDot.className = 'status-dot connected';
+            statusText.textContent = 'Demo mode';
+
+            let price = 88.50 + Math.random() * 2;
+            openPrice = price;
+            const now = Math.floor(Date.now() / 1000);
+            const startTime = now - 3600;
+
+            // Generate 1h of historical 1-min candles
+            const candles = [];
+            const lineData = [];
+            let p = price - 1 + Math.random() * 2;
+            for (let t = startTime; t < now; t += 60) {
+                const o = p;
+                const movement = (Math.random() - 0.48) * 0.15;
+                const h = o + Math.abs(movement) + Math.random() * 0.08;
+                const l = o - Math.abs(movement) - Math.random() * 0.08;
+                p = o + movement;
+                candles.push({ time: t, open: o, high: h, low: l, close: p });
+                lineData.push({ time: t, value: p });
+            }
+            candleSeries.setData(candles);
+            lineSeries.setData(lineData);
+            currentCandle = candles[candles.length - 1];
+            updatePrice(p);
+
+            // Simulate live ticks
+            setInterval(() => {
+                const volatility = 0.03 + Math.random() * 0.05;
+                price += (Math.random() - 0.48) * volatility;
+                handleTick(price, Date.now());
+            }, 800 + Math.random() * 400);
+        }
+
+        // --- Init ---
+        async function init() {
+            if (FINNHUB_API_KEY === 'demo') {
+                startDemo();
+                return;
+            }
+            const historyLoaded = await loadHistory();
+            if (historyLoaded) {
+                overlay.classList.add('hidden');
+            }
+            connectWebSocket();
+        }
+
+        init();
+    })();
+    </script>
+</body>
+</html>
