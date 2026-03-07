@@ -4,3 +4,9 @@ services:
     expose:
       - "3000"
     restart: unless-stopped
+    networks:
+      - dokploy-network
+
+networks:
+  dokploy-network:
+    external: true
