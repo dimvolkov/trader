@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>USD/RUB Forex Chart</title>
+    <title>Forex Chart</title>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body {
@@ -66,6 +66,19 @@
             border-color: #2962ff;
             color: #fff;
         }
+        .pair-select {
+            background: #2a2e39;
+            color: #fff;
+            border: 1px solid #363a45;
+            padding: 6px 10px;
+            border-radius: 4px;
+            font-size: 16px;
+            font-weight: 700;
+            cursor: pointer;
+            outline: none;
+        }
+        .pair-select:hover { border-color: #2962ff; }
+        .pair-select:focus { border-color: #2962ff; }
         .chart-container {
             flex: 1;
             position: relative;
@@ -115,7 +128,7 @@
 <body>
     <div class="header">
         <div class="pair-info">
-            <span class="pair-name">USD / RUB</span>
+            <select class="pair-select" id="pairSelect"></select>
             <span class="price" id="currentPrice">--</span>
             <span class="change" id="priceChange">--</span>
         </div>
@@ -151,9 +164,32 @@
     <script>
     (function() {
         const API_KEY = '8694f4e28a974a0eba808458ceb33bfb';
-        const SYMBOL = 'USD/RUB';
+        let currentSymbol = 'USD/RUB';
         const API_BASE = 'https://api.twelvedata.com';
         const POLL_INTERVAL = 5000;
+
+        const PAIRS = {
+            'RUB пары': [
+                'USD/RUB', 'EUR/RUB', 'GBP/RUB', 'CNY/RUB', 'CHF/RUB', 'JPY/RUB',
+                'CAD/RUB', 'AUD/RUB', 'BRL/RUB', 'INR/RUB', 'PLN/RUB', 'SEK/RUB',
+                'SGD/RUB', 'ZAR/RUB', 'UAH/RUB', 'AZN/RUB', 'GEL/RUB', 'KGS/RUB',
+                'TJS/RUB', 'MDL/RUB', 'BGN/RUB',
+            ],
+            'Мажоры': [
+                'EUR/USD', 'GBP/USD', 'USD/JPY', 'USD/CHF', 'AUD/USD', 'USD/CAD', 'NZD/USD',
+            ],
+            'Кроссы EUR': [
+                'EUR/GBP', 'EUR/JPY', 'EUR/CHF', 'EUR/AUD', 'EUR/CAD', 'EUR/NZD',
+            ],
+            'Кроссы GBP': [
+                'GBP/JPY', 'GBP/CHF', 'GBP/AUD', 'GBP/CAD', 'GBP/NZD',
+            ],
+            'Экзотика': [
+                'USD/TRY', 'USD/ZAR', 'USD/MXN', 'USD/BRL', 'USD/INR', 'USD/CNY',
+                'USD/SGD', 'USD/HKD', 'USD/PLN', 'USD/SEK', 'USD/NOK', 'USD/DKK',
+                'USD/THB', 'USD/KRW', 'USD/ARS', 'USD/CLP',
+            ],
+        };
 
         // --- Chart setup ---
         const container = document.getElementById('chartContainer');
@@ -217,6 +253,33 @@
         const statusText = document.getElementById('statusText');
         const lastUpdateEl = document.getElementById('lastUpdate');
         const overlay = document.getElementById('overlay');
+        const pairSelect = document.getElementById('pairSelect');
+
+        // --- Populate pair selector ---
+        for (const [group, pairs] of Object.entries(PAIRS)) {
+            const optgroup = document.createElement('optgroup');
+            optgroup.label = group;
+            for (const pair of pairs) {
+                const opt = document.createElement('option');
+                opt.value = pair;
+                opt.textContent = pair;
+                if (pair === currentSymbol) opt.selected = true;
+                optgroup.appendChild(opt);
+            }
+            pairSelect.appendChild(optgroup);
+        }
+
+        pairSelect.addEventListener('change', () => {
+            currentSymbol = pairSelect.value;
+            document.title = currentSymbol + ' — Forex Chart';
+            currentCandle = null;
+            openPrice = null;
+            stopPolling();
+            if (ws) { ws.onclose = null; ws.close(); ws = null; }
+            wsRetries = 0;
+            overlay.classList.remove('hidden');
+            init();
+        });
 
         // --- Chart type toggle ---
         document.querySelectorAll('.controls:not(.timeframes) button').forEach(btn => {
@@ -294,7 +357,7 @@
         async function loadHistory() {
             try {
                 const tf = TF_CONFIG[currentTF];
-                const url = `${API_BASE}/time_series?symbol=${SYMBOL}&interval=${tf.interval}&outputsize=${tf.outputsize}&apikey=${API_KEY}`;
+                const url = `${API_BASE}/time_series?symbol=${currentSymbol}&interval=${tf.interval}&outputsize=${tf.outputsize}&apikey=${API_KEY}`;
                 const res = await fetch(url);
                 const data = await res.json();
 
@@ -339,7 +402,7 @@
 
         async function pollQuote() {
             try {
-                const url = `${API_BASE}/price?symbol=${SYMBOL}&apikey=${API_KEY}`;
+                const url = `${API_BASE}/price?symbol=${currentSymbol}&apikey=${API_KEY}`;
                 const res = await fetch(url);
                 const data = await res.json();
                 if (data.price) {
