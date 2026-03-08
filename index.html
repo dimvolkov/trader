@@ -150,9 +150,10 @@
     <script src="https://unpkg.com/lightweight-charts@4.1.1/dist/lightweight-charts.standalone.production.js"></script>
     <script>
     (function() {
-        const FINNHUB_API_KEY = 'demo';
-        const SYMBOL = 'OANDA:USD_RUB';
-        const POLL_INTERVAL = 3000;
+        const API_KEY = '8694f4e28a974a0eba808458ceb33bfb';
+        const SYMBOL = 'USD/RUB';
+        const API_BASE = 'https://api.twelvedata.com';
+        const POLL_INTERVAL = 5000;
 
         // --- Chart setup ---
         const container = document.getElementById('chartContainer');
@@ -196,17 +197,17 @@
         let currentCandle = null;
         let openPrice = null;
         let chartType = 'candle';
-        let currentTF = '1'; // resolution
+        let currentTF = '1';
         let priceLines = [];
 
         const TF_CONFIG = {
-            '1':  { seconds: 60,       historySpan: 24 * 3600,       resolution: '1',  label: '1м' },
-            '15': { seconds: 15 * 60,  historySpan: 7 * 24 * 3600,   resolution: '15', label: '15м' },
-            '30': { seconds: 30 * 60,  historySpan: 14 * 24 * 3600,  resolution: '30', label: '30м' },
-            '60': { seconds: 3600,     historySpan: 30 * 24 * 3600,  resolution: '60', label: '1ч' },
-            'W':  { seconds: 7 * 24 * 3600,  historySpan: 365 * 24 * 3600,     resolution: 'W', label: '1Н' },
-            'M':  { seconds: 30 * 24 * 3600, historySpan: 3 * 365 * 24 * 3600, resolution: 'M', label: '1М' },
-            'Y':  { seconds: 365 * 24 * 3600, historySpan: 20 * 365 * 24 * 3600, resolution: 'M', label: '1Г' },
+            '1':  { interval: '1min',   outputsize: 500,  seconds: 60 },
+            '15': { interval: '15min',  outputsize: 500,  seconds: 900 },
+            '30': { interval: '30min',  outputsize: 500,  seconds: 1800 },
+            '60': { interval: '1h',     outputsize: 500,  seconds: 3600 },
+            'W':  { interval: '1day',   outputsize: 365,  seconds: 86400 },
+            'M':  { interval: '1week',  outputsize: 156,  seconds: 604800 },
+            'Y':  { interval: '1month', outputsize: 240,  seconds: 2592000 },
         };
 
         // --- UI refs ---
@@ -235,11 +236,7 @@
                 btn.classList.add('active');
                 currentTF = btn.dataset.tf;
                 currentCandle = null;
-                if (FINNHUB_API_KEY === 'demo') {
-                    generateDemoData();
-                } else {
-                    loadHistory();
-                }
+                loadHistory();
             });
         });
 
@@ -256,8 +253,14 @@
             lastUpdateEl.textContent = new Date().toLocaleTimeString();
         }
 
-        function toChartTime(ts) {
-            return Math.floor(ts / 1000);
+        function parseDatetime(dt) {
+            const parts = dt.split(' ');
+            const d = parts[0].split('-');
+            if (parts.length === 1) {
+                return Date.UTC(+d[0], +d[1] - 1, +d[2]) / 1000;
+            }
+            const t = parts[1].split(':');
+            return Date.UTC(+d[0], +d[1] - 1, +d[2], +t[0], +t[1], +t[2] || 0) / 1000;
         }
 
         function getCandleTime(ts) {
@@ -282,41 +285,37 @@
             updatePrice(price);
         }
 
-        // --- Connection: WebSocket with REST fallback ---
-        function setStatus(connected) {
+        function setStatus(text, connected) {
             statusDot.className = 'status-dot' + (connected ? ' connected' : '');
-            statusText.textContent = connected ? 'Connected (realtime)' : 'Disconnected';
+            statusText.textContent = text;
         }
 
-        function setStatusPolling() {
-            statusDot.className = 'status-dot connected';
-            statusText.textContent = 'Connected (polling)';
-        }
-
-        // Load historical candles via REST
+        // --- Load historical candles via Twelve Data ---
         async function loadHistory() {
             try {
                 const tf = TF_CONFIG[currentTF];
-                const to = Math.floor(Date.now() / 1000);
-                const from = to - tf.historySpan;
-                const url = `https://finnhub.io/api/v1/forex/candle?symbol=${SYMBOL}&resolution=${tf.resolution}&from=${from}&to=${to}&token=${FINNHUB_API_KEY}`;
+                const url = `${API_BASE}/time_series?symbol=${SYMBOL}&interval=${tf.interval}&outputsize=${tf.outputsize}&apikey=${API_KEY}`;
                 const res = await fetch(url);
                 const data = await res.json();
-                if (data.s === 'ok' && data.t) {
+
+                if (data.status === 'ok' && data.values) {
+                    const values = data.values.reverse();
                     const candles = [];
                     const lineData = [];
-                    for (let i = 0; i < data.t.length; i++) {
-                        candles.push({
-                            time: data.t[i],
-                            open: data.o[i],
-                            high: data.h[i],
-                            low: data.l[i],
-                            close: data.c[i],
-                        });
-                        lineData.push({ time: data.t[i], value: data.c[i] });
+
+                    for (const v of values) {
+                        const time = parseDatetime(v.datetime);
+                        const o = parseFloat(v.open);
+                        const h = parseFloat(v.high);
+                        const l = parseFloat(v.low);
+                        const c = parseFloat(v.close);
+                        candles.push({ time, open: o, high: h, low: l, close: c });
+                        lineData.push({ time, value: c });
                     }
+
                     candleSeries.setData(candles);
                     lineSeries.setData(lineData);
+
                     if (candles.length > 0) {
                         const last = candles[candles.length - 1];
                         openPrice = candles[0].open;
@@ -324,7 +323,10 @@
                         updatePrice(last.close);
                         drawSupportResistance(candles);
                     }
+                    overlay.classList.add('hidden');
                     return true;
+                } else {
+                    console.warn('API response:', data);
                 }
             } catch (e) {
                 console.warn('History load failed:', e);
@@ -332,15 +334,16 @@
             return false;
         }
 
-        // REST polling fallback
+        // --- REST polling for live price ---
         let pollTimer = null;
+
         async function pollQuote() {
             try {
-                const url = `https://finnhub.io/api/v1/quote?symbol=${SYMBOL}&token=${FINNHUB_API_KEY}`;
+                const url = `${API_BASE}/price?symbol=${SYMBOL}&apikey=${API_KEY}`;
                 const res = await fetch(url);
                 const data = await res.json();
-                if (data.c) {
-                    handleTick(data.c, Date.now());
+                if (data.price) {
+                    handleTick(parseFloat(data.price), Date.now());
                 }
             } catch (e) {
                 console.warn('Poll failed:', e);
@@ -348,7 +351,7 @@
         }
 
         function startPolling() {
-            setStatusPolling();
+            setStatus('Connected (polling)', true);
             pollQuote();
             pollTimer = setInterval(pollQuote, POLL_INTERVAL);
         }
@@ -357,13 +360,13 @@
             if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
         }
 
-        // WebSocket realtime
+        // --- WebSocket realtime ---
         let ws = null;
         let wsRetries = 0;
 
         function connectWebSocket() {
             try {
-                ws = new WebSocket(`wss://ws.finnhub.io?token=${FINNHUB_API_KEY}`);
+                ws = new WebSocket(`wss://ws.twelvedata.com/v1/quotes/price?apikey=${API_KEY}`);
             } catch (e) {
                 console.warn('WS init failed, falling back to polling');
                 startPolling();
@@ -373,25 +376,25 @@
             ws.onopen = () => {
                 wsRetries = 0;
                 stopPolling();
-                setStatus(true);
-                overlay.classList.add('hidden');
-                ws.send(JSON.stringify({ type: 'subscribe', symbol: SYMBOL }));
+                setStatus('Connected (realtime)', true);
+                ws.send(JSON.stringify({
+                    action: 'subscribe',
+                    params: { symbols: SYMBOL }
+                }));
             };
 
             ws.onmessage = (event) => {
                 const msg = JSON.parse(event.data);
-                if (msg.type === 'trade' && msg.data) {
-                    msg.data.forEach(trade => {
-                        handleTick(trade.p, trade.t);
-                    });
+                if (msg.event === 'price' && msg.price) {
+                    handleTick(parseFloat(msg.price), msg.timestamp ? msg.timestamp * 1000 : Date.now());
                 }
             };
 
             ws.onclose = () => {
-                setStatus(false);
-                if (wsRetries < 5) {
+                setStatus('Disconnected', false);
+                if (wsRetries < 3) {
                     wsRetries++;
-                    setTimeout(connectWebSocket, 2000 * wsRetries);
+                    setTimeout(connectWebSocket, 3000 * wsRetries);
                 } else {
                     startPolling();
                 }
@@ -428,7 +431,6 @@
                 if (isSupport) levels.push({ price: candles[i].low, type: 'support' });
             }
 
-            // Cluster nearby levels (merge within 0.15% of each other)
             levels.sort((a, b) => a.price - b.price);
             const merged = [];
             for (const lvl of levels) {
@@ -441,7 +443,6 @@
                 }
             }
 
-            // Keep top levels by strength (touch count), max 4 support + 4 resistance
             const supports = merged.filter(l => l.type === 'support').sort((a, b) => b.count - a.count).slice(0, 4);
             const resistances = merged.filter(l => l.type === 'resistance').sort((a, b) => b.count - a.count).slice(0, 4);
             return [...supports, ...resistances];
@@ -463,66 +464,15 @@
             });
         }
 
-        // --- Generate demo data if no API key ---
-        let demoPrice = 88.50 + Math.random() * 2;
-        let demoTickTimer = null;
-
-        function generateDemoData() {
-            const tf = TF_CONFIG[currentTF];
-            const now = Math.floor(Date.now() / 1000);
-            const startTime = now - tf.historySpan;
-            const step = tf.seconds;
-
-            // Scale volatility to timeframe
-            const baseVol = 0.15 * Math.sqrt(step / 60);
-
-            const candles = [];
-            const lineData = [];
-            let p = demoPrice - 1 + Math.random() * 2;
-            for (let t = startTime; t < now; t += step) {
-                const o = p;
-                const movement = (Math.random() - 0.48) * baseVol;
-                const h = o + Math.abs(movement) + Math.random() * baseVol * 0.5;
-                const l = o - Math.abs(movement) - Math.random() * baseVol * 0.5;
-                p = o + movement;
-                candles.push({ time: t, open: o, high: h, low: l, close: p });
-                lineData.push({ time: t, value: p });
-            }
-            candleSeries.setData(candles);
-            lineSeries.setData(lineData);
-            currentCandle = candles[candles.length - 1];
-            openPrice = candles[0].open;
-            demoPrice = p;
-            updatePrice(p);
-            drawSupportResistance(candles);
-        }
-
-        function startDemo() {
-            overlay.classList.add('hidden');
-            statusDot.className = 'status-dot connected';
-            statusText.textContent = 'Demo mode';
-
-            generateDemoData();
-
-            // Simulate live ticks
-            demoTickTimer = setInterval(() => {
-                const volatility = 0.03 + Math.random() * 0.05;
-                demoPrice += (Math.random() - 0.48) * volatility;
-                handleTick(demoPrice, Date.now());
-            }, 800 + Math.random() * 400);
-        }
-
         // --- Init ---
         async function init() {
-            if (FINNHUB_API_KEY === 'demo') {
-                startDemo();
-                return;
-            }
-            const historyLoaded = await loadHistory();
-            if (historyLoaded) {
+            const loaded = await loadHistory();
+            if (loaded) {
+                connectWebSocket();
+            } else {
+                setStatus('Failed to load data', false);
                 overlay.classList.add('hidden');
             }
-            connectWebSocket();
         }
 
         init();
