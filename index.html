@@ -326,8 +326,7 @@
             status: '',
             log: []
         };
-        let advisorImpulseSeries = null;
-        let advisorCorrectionSeries = null;
+        let advisorSegmentSeries = [];
         let advisorPriceLines = [];
         let advisorMarkers = [];
 
@@ -897,8 +896,8 @@
 
         function clearAdvisorMarkup() {
             // Remove advisor line series
-            if (advisorImpulseSeries) { chart.removeSeries(advisorImpulseSeries); advisorImpulseSeries = null; }
-            if (advisorCorrectionSeries) { chart.removeSeries(advisorCorrectionSeries); advisorCorrectionSeries = null; }
+            advisorSegmentSeries.forEach(s => chart.removeSeries(s));
+            advisorSegmentSeries = [];
             // Remove advisor price lines
             advisorPriceLines.forEach(pl => candleSeries.removePriceLine(pl));
             advisorPriceLines = [];
@@ -911,8 +910,8 @@
 
         function renderAdvisorMarkup(state) {
             // Clear previous advisor markup
-            if (advisorImpulseSeries) { chart.removeSeries(advisorImpulseSeries); advisorImpulseSeries = null; }
-            if (advisorCorrectionSeries) { chart.removeSeries(advisorCorrectionSeries); advisorCorrectionSeries = null; }
+            advisorSegmentSeries.forEach(s => chart.removeSeries(s));
+            advisorSegmentSeries = [];
             advisorPriceLines.forEach(pl => candleSeries.removePriceLine(pl));
             advisorPriceLines = [];
             advisorMarkers = [];
@@ -979,68 +978,22 @@
 
             flushMarkers();
 
-            // --- Impulse/correction lines ---
-            const impulseData = [];
-            const correctionData = [];
-
+            // --- Impulse/correction lines (each segment = separate series) ---
             for (const seg of state.impulses) {
-                const arr = seg.type === 'impulse' ? impulseData : correctionData;
-                arr.push({ time: seg.startTime, value: seg.startPrice });
-                arr.push({ time: seg.endTime, value: seg.endPrice });
-            }
-
-            if (impulseData.length > 0) {
-                impulseData.sort((a, b) => a.time - b.time);
-                advisorImpulseSeries = chart.addLineSeries({
-                    color: '#2962ff',
-                    lineWidth: 2,
-                    lineStyle: LightweightCharts.LineStyle.Solid,
+                const isImpulse = seg.type === 'impulse';
+                const series = chart.addLineSeries({
+                    color: isImpulse ? '#2962ff' : '#ff9800',
+                    lineWidth: isImpulse ? 3 : 2,
+                    lineStyle: isImpulse ? LightweightCharts.LineStyle.Solid : LightweightCharts.LineStyle.Dashed,
                     lastValueVisible: false,
                     priceLineVisible: false,
                     crosshairMarkerVisible: false,
                 });
-                // Build connected segments with gaps
-                const impulseSegments = state.impulses.filter(s => s.type === 'impulse');
-                const impPoints = [];
-                for (const seg of impulseSegments) {
-                    impPoints.push({ time: seg.startTime, value: seg.startPrice });
-                    impPoints.push({ time: seg.endTime, value: seg.endPrice });
-                }
-                impPoints.sort((a, b) => a.time - b.time);
-                // Deduplicate by time
-                const uniqueImp = [];
-                for (const p of impPoints) {
-                    if (uniqueImp.length === 0 || uniqueImp[uniqueImp.length - 1].time !== p.time) {
-                        uniqueImp.push(p);
-                    }
-                }
-                if (uniqueImp.length > 0) advisorImpulseSeries.setData(uniqueImp);
-            }
-
-            if (correctionData.length > 0) {
-                correctionData.sort((a, b) => a.time - b.time);
-                advisorCorrectionSeries = chart.addLineSeries({
-                    color: '#ff9800',
-                    lineWidth: 2,
-                    lineStyle: LightweightCharts.LineStyle.Solid,
-                    lastValueVisible: false,
-                    priceLineVisible: false,
-                    crosshairMarkerVisible: false,
-                });
-                const corrSegments = state.impulses.filter(s => s.type === 'correction');
-                const corrPoints = [];
-                for (const seg of corrSegments) {
-                    corrPoints.push({ time: seg.startTime, value: seg.startPrice });
-                    corrPoints.push({ time: seg.endTime, value: seg.endPrice });
-                }
-                corrPoints.sort((a, b) => a.time - b.time);
-                const uniqueCorr = [];
-                for (const p of corrPoints) {
-                    if (uniqueCorr.length === 0 || uniqueCorr[uniqueCorr.length - 1].time !== p.time) {
-                        uniqueCorr.push(p);
-                    }
-                }
-                if (uniqueCorr.length > 0) advisorCorrectionSeries.setData(uniqueCorr);
+                series.setData([
+                    { time: seg.startTime, value: seg.startPrice },
+                    { time: seg.endTime, value: seg.endPrice },
+                ]);
+                advisorSegmentSeries.push(series);
             }
 
             // --- H1 Levels as price lines ---
