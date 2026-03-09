@@ -1,0 +1,418 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Настройки API — Forex</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            background: #131722;
+            color: #d1d4dc;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+        }
+        .header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 12px 20px;
+            background: #1e222d;
+            border-bottom: 1px solid #2a2e39;
+        }
+        .header-left {
+            display: flex;
+            align-items: center;
+            gap: 16px;
+        }
+        .header-left h1 {
+            font-size: 18px;
+            font-weight: 700;
+            color: #fff;
+        }
+        .header-left a {
+            color: #2962ff;
+            text-decoration: none;
+            font-size: 13px;
+        }
+        .header-left a:hover { text-decoration: underline; }
+        .content {
+            max-width: 720px;
+            margin: 0 auto;
+            padding: 24px 20px;
+            width: 100%;
+        }
+        .section {
+            margin-bottom: 24px;
+        }
+        .section h2 {
+            font-size: 14px;
+            color: #787b86;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin-bottom: 12px;
+        }
+        .source-card {
+            background: #1e222d;
+            border: 1px solid #2a2e39;
+            border-radius: 8px;
+            padding: 16px;
+            margin-bottom: 12px;
+        }
+        .source-card.active-source {
+            border-color: #2962ff;
+        }
+        .source-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 10px;
+        }
+        .source-name {
+            font-size: 15px;
+            font-weight: 700;
+            color: #fff;
+        }
+        .source-badge {
+            font-size: 11px;
+            padding: 2px 8px;
+            border-radius: 10px;
+            font-weight: 600;
+        }
+        .badge-active {
+            background: rgba(38, 166, 154, 0.2);
+            color: #26a69a;
+        }
+        .badge-configured {
+            background: rgba(41, 98, 255, 0.2);
+            color: #2962ff;
+        }
+        .badge-empty {
+            background: rgba(120, 123, 134, 0.2);
+            color: #787b86;
+        }
+        .source-info {
+            font-size: 12px;
+            color: #787b86;
+            margin-bottom: 10px;
+            line-height: 1.5;
+        }
+        .source-info a {
+            color: #2962ff;
+            text-decoration: none;
+        }
+        .source-info a:hover { text-decoration: underline; }
+        .key-row {
+            display: flex;
+            gap: 8px;
+            align-items: center;
+        }
+        .key-input {
+            flex: 1;
+            background: #2a2e39;
+            color: #fff;
+            border: 1px solid #363a45;
+            padding: 8px 12px;
+            border-radius: 4px;
+            font-size: 13px;
+            font-family: monospace;
+            outline: none;
+        }
+        .key-input:focus { border-color: #2962ff; }
+        .key-input::placeholder { color: #4a4e59; }
+        .btn {
+            background: #2a2e39;
+            color: #d1d4dc;
+            border: 1px solid #363a45;
+            padding: 8px 16px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 13px;
+            transition: background 0.2s;
+            white-space: nowrap;
+        }
+        .btn:hover { background: #363a45; }
+        .btn-primary {
+            background: #2962ff;
+            border-color: #2962ff;
+            color: #fff;
+        }
+        .btn-primary:hover { background: #1e4fd6; }
+        .btn-use {
+            background: #26a69a;
+            border-color: #26a69a;
+            color: #fff;
+        }
+        .btn-use:hover { background: #1e8e83; }
+        .btn-test {
+            background: #ff9800;
+            border-color: #ff9800;
+            color: #fff;
+        }
+        .btn-test:hover { background: #e68900; }
+        .btn-row {
+            display: flex;
+            gap: 8px;
+            margin-top: 8px;
+        }
+        .test-result {
+            font-size: 12px;
+            margin-top: 6px;
+            min-height: 18px;
+        }
+        .test-ok { color: #26a69a; }
+        .test-fail { color: #ef5350; }
+        .test-loading { color: #2962ff; }
+        .active-source-bar {
+            background: #1a1e2a;
+            border: 1px solid #2a2e39;
+            border-radius: 8px;
+            padding: 12px 16px;
+            margin-bottom: 20px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+        .active-label {
+            font-size: 13px;
+            color: #787b86;
+        }
+        .active-value {
+            font-size: 15px;
+            font-weight: 700;
+            color: #26a69a;
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <div class="header-left">
+            <h1>Настройки API</h1>
+            <a href="index.html">&larr; График</a>
+            <a href="scanner.html">Сканер</a>
+        </div>
+    </div>
+    <div class="content">
+        <div class="active-source-bar">
+            <span class="active-label">Активный источник:</span>
+            <span class="active-value" id="activeSourceLabel">—</span>
+        </div>
+
+        <div class="section">
+            <h2>Источники данных</h2>
+            <div id="sourceCards"></div>
+        </div>
+    </div>
+
+    <script>
+    (function() {
+        const SOURCES = [
+            {
+                id: 'twelvedata',
+                name: 'Twelve Data',
+                url: 'https://twelvedata.com',
+                signupUrl: 'https://twelvedata.com/pricing',
+                limits: '8 запросов/мин, ~800/день',
+                defaultKey: '8694f4e28a974a0eba808458ceb33bfb',
+                testEndpoint: (key) => `https://api.twelvedata.com/time_series?symbol=EUR/USD&interval=1h&outputsize=1&apikey=${key}`,
+                validateResponse: (data) => data.status === 'ok' && data.values,
+                errorMessage: (data) => data.code === 429 ? 'Rate limit исчерпан' : (data.message || 'Ошибка API'),
+            },
+            {
+                id: 'tradermade',
+                name: 'TraderMade',
+                url: 'https://tradermade.com',
+                signupUrl: 'https://tradermade.com/signup',
+                limits: '1 000 запросов/мес',
+                defaultKey: '',
+                testEndpoint: (key) => {
+                    const d = new Date();
+                    const to = d.toISOString().slice(0,10);
+                    const from = new Date(d.getTime() - 2*86400000).toISOString().slice(0,10);
+                    return `https://marketdata.tradermade.com/api/v1/timeseries?currency=EURUSD&api_key=${key}&start_date=${from}&end_date=${to}&interval=hourly&format=records`;
+                },
+                validateResponse: (data) => data.quotes && Array.isArray(data.quotes),
+                errorMessage: (data) => data.error || data.message || 'Ошибка API',
+            },
+            {
+                id: 'polygon',
+                name: 'Polygon.io',
+                url: 'https://polygon.io',
+                signupUrl: 'https://polygon.io/dashboard/signup',
+                limits: '5 запросов/мин, данные с задержкой',
+                defaultKey: '',
+                testEndpoint: (key) => {
+                    const d = new Date();
+                    const to = d.toISOString().slice(0,10);
+                    const from = new Date(d.getTime() - 7*86400000).toISOString().slice(0,10);
+                    return `https://api.polygon.io/v2/aggs/ticker/C:EURUSD/range/1/day/${from}/${to}?adjusted=true&sort=asc&limit=2&apiKey=${key}`;
+                },
+                validateResponse: (data) => data.status === 'OK' || data.status === 'DELAYED',
+                errorMessage: (data) => data.error || data.message || 'Ошибка API',
+            },
+            {
+                id: 'finnhub',
+                name: 'Finnhub',
+                url: 'https://finnhub.io',
+                signupUrl: 'https://finnhub.io/register',
+                limits: '60 запросов/мин (лучший лимит)',
+                defaultKey: '',
+                testEndpoint: (key) => {
+                    const to = Math.floor(Date.now() / 1000);
+                    const from = to - 86400;
+                    return `https://finnhub.io/api/v1/forex/candle?symbol=OANDA:EUR_USD&resolution=60&from=${from}&to=${to}&token=${key}`;
+                },
+                validateResponse: (data) => data.s === 'ok' && data.c && data.c.length > 0,
+                errorMessage: (data) => data.error || 'Нет данных или неверный ключ',
+            },
+            {
+                id: 'fcsapi',
+                name: 'FCS API',
+                url: 'https://fcsapi.com',
+                signupUrl: 'https://fcsapi.com/dashboard/register',
+                limits: '15 000 кредитов/мес, поддержка USD/RUB',
+                defaultKey: '',
+                testEndpoint: (key) => `https://fcsapi.com/api-v3/forex/history?symbol=EUR/USD&period=1h&access_key=${key}`,
+                validateResponse: (data) => data.response && Array.isArray(data.response) && data.response.length > 0,
+                errorMessage: (data) => data.msg || data.message || 'Ошибка API',
+            },
+            {
+                id: 'alphavantage',
+                name: 'Alpha Vantage',
+                url: 'https://www.alphavantage.co',
+                signupUrl: 'https://www.alphavantage.co/support/#api-key',
+                limits: '25 запросов/день',
+                defaultKey: '',
+                testEndpoint: (key) => `https://www.alphavantage.co/query?function=FX_INTRADAY&from_symbol=EUR&to_symbol=USD&interval=60min&outputsize=compact&apikey=${key}`,
+                validateResponse: (data) => data['Time Series FX (Intraday)'] && Object.keys(data['Time Series FX (Intraday)']).length > 0,
+                errorMessage: (data) => data['Error Message'] || data['Note'] || 'Ошибка API',
+            },
+        ];
+
+        const APIKEYS_STORAGE = 'chartApiKeys';
+        const SOURCE_STORAGE = 'chartDataSource';
+
+        function loadKeys() {
+            try { const k = JSON.parse(localStorage.getItem(APIKEYS_STORAGE)); if (k && typeof k === 'object') return k; } catch {}
+            return {};
+        }
+        function saveKeys(keys) {
+            localStorage.setItem(APIKEYS_STORAGE, JSON.stringify(keys));
+        }
+        function loadActiveSource() {
+            try { const s = localStorage.getItem(SOURCE_STORAGE); if (s) return s; } catch {}
+            return 'twelvedata';
+        }
+        function setActiveSource(id) {
+            localStorage.setItem(SOURCE_STORAGE, id);
+            // Also sync to scanner
+            localStorage.setItem('scannerDataSource', id);
+            renderAll();
+        }
+        function getKey(sourceId) {
+            const keys = loadKeys();
+            const src = SOURCES.find(s => s.id === sourceId);
+            return keys[sourceId] || (src ? src.defaultKey : '') || '';
+        }
+
+        function renderAll() {
+            const active = loadActiveSource();
+            document.getElementById('activeSourceLabel').textContent =
+                SOURCES.find(s => s.id === active)?.name || active;
+
+            const container = document.getElementById('sourceCards');
+            container.innerHTML = '';
+
+            for (const src of SOURCES) {
+                const key = getKey(src.id);
+                const isActive = src.id === active;
+                const hasKey = !!key;
+
+                const card = document.createElement('div');
+                card.className = 'source-card' + (isActive ? ' active-source' : '');
+                card.innerHTML = `
+                    <div class="source-header">
+                        <span class="source-name">${src.name}</span>
+                        ${isActive ? '<span class="source-badge badge-active">Активный</span>'
+                          : hasKey ? '<span class="source-badge badge-configured">Ключ задан</span>'
+                          : '<span class="source-badge badge-empty">Нет ключа</span>'}
+                    </div>
+                    <div class="source-info">
+                        Лимиты: ${src.limits}<br>
+                        <a href="${src.signupUrl}" target="_blank">Получить ключ &rarr;</a>
+                        &nbsp;|&nbsp;
+                        <a href="${src.url}" target="_blank">${src.url}</a>
+                    </div>
+                    <div class="key-row">
+                        <input type="text" class="key-input" id="key-${src.id}"
+                            value="${key}" placeholder="Вставьте API ключ">
+                    </div>
+                    <div class="btn-row">
+                        <button class="btn btn-primary" onclick="saveKey('${src.id}')">Сохранить</button>
+                        <button class="btn btn-test" onclick="testKey('${src.id}')" id="testBtn-${src.id}">Проверить</button>
+                        ${!isActive && hasKey ? `<button class="btn btn-use" onclick="useSource('${src.id}')">Использовать</button>` : ''}
+                    </div>
+                    <div class="test-result" id="testResult-${src.id}"></div>
+                `;
+                container.appendChild(card);
+            }
+
+            // Also sync scanner API keys
+            localStorage.setItem('scannerApiKeys', JSON.stringify(loadKeys()));
+        }
+
+        window.saveKey = function(sourceId) {
+            const input = document.getElementById('key-' + sourceId);
+            const keys = loadKeys();
+            keys[sourceId] = input.value.trim();
+            saveKeys(keys);
+            renderAll();
+        };
+
+        window.useSource = function(sourceId) {
+            const key = getKey(sourceId);
+            if (!key) {
+                document.getElementById('testResult-' + sourceId).innerHTML =
+                    '<span class="test-fail">Сначала введите и сохраните ключ</span>';
+                return;
+            }
+            setActiveSource(sourceId);
+        };
+
+        window.testKey = function(sourceId) {
+            const input = document.getElementById('key-' + sourceId);
+            const key = input.value.trim();
+            const resultEl = document.getElementById('testResult-' + sourceId);
+            const btn = document.getElementById('testBtn-' + sourceId);
+
+            if (!key) {
+                resultEl.innerHTML = '<span class="test-fail">Введите ключ</span>';
+                return;
+            }
+
+            const src = SOURCES.find(s => s.id === sourceId);
+            resultEl.innerHTML = '<span class="test-loading">Проверка...</span>';
+            btn.disabled = true;
+
+            fetch(src.testEndpoint(key))
+                .then(r => r.json())
+                .then(data => {
+                    if (src.validateResponse(data)) {
+                        resultEl.innerHTML = '<span class="test-ok">Ключ работает</span>';
+                    } else {
+                        resultEl.innerHTML = `<span class="test-fail">${src.errorMessage(data)}</span>`;
+                    }
+                })
+                .catch(err => {
+                    resultEl.innerHTML = `<span class="test-fail">Ошибка: ${err.message}</span>`;
+                })
+                .finally(() => { btn.disabled = false; });
+        };
+
+        renderAll();
+    })();
+    </script>
+</body>
+</html>

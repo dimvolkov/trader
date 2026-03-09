@@ -86,52 +86,6 @@
         }
         .pair-select:hover { border-color: #2962ff; }
         .pair-select:focus { border-color: #2962ff; }
-        .settings-bar {
-            padding: 8px 20px;
-            background: #1a1e2a;
-            border-bottom: 1px solid #2a2e39;
-            display: flex;
-            align-items: center;
-            gap: 12px;
-            font-size: 13px;
-        }
-        .settings-bar label {
-            color: #787b86;
-            font-size: 12px;
-        }
-        .settings-bar select {
-            background: #2a2e39;
-            color: #fff;
-            border: 1px solid #363a45;
-            padding: 4px 8px;
-            border-radius: 4px;
-            font-size: 13px;
-            cursor: pointer;
-            outline: none;
-        }
-        .settings-bar input[type="text"] {
-            background: #2a2e39;
-            color: #fff;
-            border: 1px solid #363a45;
-            padding: 4px 8px;
-            border-radius: 4px;
-            font-size: 13px;
-            outline: none;
-            width: 260px;
-            font-family: monospace;
-        }
-        .settings-bar input:focus, .settings-bar select:hover { border-color: #2962ff; }
-        .settings-toggle {
-            background: none;
-            border: none;
-            color: #787b86;
-            cursor: pointer;
-            font-size: 18px;
-            padding: 0 4px;
-            line-height: 1;
-        }
-        .settings-toggle:hover { color: #fff; }
-        .settings-bar.hidden { display: none; }
         .chart-wrapper {
             flex: 1;
             display: flex;
@@ -250,19 +204,8 @@
             <button data-type="candle" class="active">Candle</button>
             <button class="advisor-btn" id="advisorBtn">Советник</button>
             <a href="scanner.html" style="background:#2a2e39;color:#d1d4dc;border:1px solid #363a45;padding:6px 14px;border-radius:4px;font-size:13px;text-decoration:none;display:inline-block;transition:background 0.2s;" onmouseover="this.style.background='#363a45'" onmouseout="this.style.background='#2a2e39'">Сканер</a>
-            <button class="settings-toggle" id="settingsToggle" title="Настройки API">&#9881;</button>
+            <a href="settings.html" style="background:#2a2e39;color:#d1d4dc;border:1px solid #363a45;padding:6px 14px;border-radius:4px;font-size:13px;text-decoration:none;display:inline-block;transition:background 0.2s;" onmouseover="this.style.background='#363a45'" onmouseout="this.style.background='#2a2e39'">&#9881; API</a>
         </div>
-    </div>
-    <div class="settings-bar hidden" id="settingsBar">
-        <label>Источник:</label>
-        <select id="chartDataSource">
-            <option value="twelvedata">Twelve Data</option>
-            <option value="tradermade">TraderMade</option>
-            <option value="polygon">Polygon.io</option>
-        </select>
-        <label>API ключ:</label>
-        <input type="text" id="chartApiKey" placeholder="Введите API ключ" spellcheck="false">
-        <button class="controls" style="padding:4px 10px;font-size:12px" onclick="saveChartSettings()">Сохранить</button>
     </div>
     <div class="chart-wrapper">
         <div class="chart-container" id="chartContainer">
@@ -308,7 +251,7 @@
             const keys = loadChartApiKeys();
             return keys[src] || DATA_SOURCES[src].defaultKey || '';
         }
-        function currentSource() { return document.getElementById('chartDataSource').value; }
+        function currentSource() { return loadChartSource(); }
 
         let currentSymbol = new URLSearchParams(window.location.search).get('pair') || 'USD/RUB';
         const POLL_INTERVAL = 10000;
@@ -580,10 +523,109 @@
             return [];
         }
 
+        // --- Finnhub ---
+        async function fetchFinnhubTS(symbol, interval) {
+            const fhSymbol = 'OANDA:' + pairConcat(symbol).slice(0,3) + '_' + pairConcat(symbol).slice(3);
+            let resolution;
+            if (interval === '1min') resolution = '1';
+            else if (interval === '15min') resolution = '15';
+            else if (interval === '30min') resolution = '30';
+            else if (interval === '1h') resolution = '60';
+            else if (interval === '1day') resolution = 'D';
+            else if (interval === '1week') resolution = 'W';
+            else if (interval === '1month') resolution = 'M';
+            else resolution = '60';
+            const to = Math.floor(Date.now() / 1000);
+            const from = to - 90 * 86400;
+            const url = `https://finnhub.io/api/v1/forex/candle?symbol=${fhSymbol}&resolution=${resolution}&from=${from}&to=${to}&token=${getChartApiKey('finnhub')}`;
+            const res = await fetch(url);
+            const data = await res.json();
+            if (data.s === 'ok' && data.c && data.c.length > 0) {
+                return data.t.map((t, i) => ({
+                    time: t,
+                    open: data.o[i], high: data.h[i],
+                    low: data.l[i], close: data.c[i],
+                }));
+            }
+            if (data.error) throw new Error(data.error);
+            return [];
+        }
+
+        // --- FCS API ---
+        async function fetchFcsApiTS(symbol, interval) {
+            let period;
+            if (interval === '1min') period = '1m';
+            else if (interval === '15min') period = '15m';
+            else if (interval === '30min') period = '30m';
+            else if (interval === '1h') period = '1h';
+            else if (interval === '1day') period = '1d';
+            else if (interval === '1week') period = '1w';
+            else if (interval === '1month') period = '1M';
+            else period = '1h';
+            const url = `https://fcsapi.com/api-v3/forex/history?symbol=${symbol}&period=${period}&access_key=${getChartApiKey('fcsapi')}`;
+            const res = await fetch(url);
+            const data = await res.json();
+            if (data.response && Array.isArray(data.response) && data.response.length > 0) {
+                return data.response.map(q => ({
+                    time: parseInt(q.t) || parseDatetime(q.tm),
+                    open: parseFloat(q.o), high: parseFloat(q.h),
+                    low: parseFloat(q.l), close: parseFloat(q.c),
+                }));
+            }
+            if (data.msg) throw new Error(data.msg);
+            return [];
+        }
+
+        // --- Alpha Vantage ---
+        async function fetchAlphaVantageTS(symbol, interval) {
+            const parts = symbol.split('/');
+            const from = parts[0], to = parts[1];
+            let func, ivParam;
+            if (['1day','1week','1month'].includes(interval)) {
+                func = interval === '1week' ? 'FX_WEEKLY' : interval === '1month' ? 'FX_MONTHLY' : 'FX_DAILY';
+                const url = `https://www.alphavantage.co/query?function=${func}&from_symbol=${from}&to_symbol=${to}&apikey=${getChartApiKey('alphavantage')}`;
+                const res = await fetch(url);
+                const data = await res.json();
+                const tsKey = Object.keys(data).find(k => k.startsWith('Time Series'));
+                if (tsKey && data[tsKey]) {
+                    return Object.entries(data[tsKey]).reverse().map(([dt, v]) => ({
+                        time: parseDatetime(dt),
+                        open: parseFloat(v['1. open']), high: parseFloat(v['2. high']),
+                        low: parseFloat(v['3. low']), close: parseFloat(v['4. close']),
+                    }));
+                }
+                if (data['Error Message']) throw new Error(data['Error Message']);
+                if (data['Note']) throw new Error('Rate limit');
+                return [];
+            } else {
+                if (interval === '1min') ivParam = '1min';
+                else if (interval === '15min') ivParam = '15min';
+                else if (interval === '30min') ivParam = '30min';
+                else ivParam = '60min';
+                const url = `https://www.alphavantage.co/query?function=FX_INTRADAY&from_symbol=${from}&to_symbol=${to}&interval=${ivParam}&outputsize=full&apikey=${getChartApiKey('alphavantage')}`;
+                const res = await fetch(url);
+                const data = await res.json();
+                const tsKey = Object.keys(data).find(k => k.startsWith('Time Series'));
+                if (tsKey && data[tsKey]) {
+                    return Object.entries(data[tsKey]).reverse().map(([dt, v]) => ({
+                        time: parseDatetime(dt),
+                        open: parseFloat(v['1. open']), high: parseFloat(v['2. high']),
+                        low: parseFloat(v['3. low']), close: parseFloat(v['4. close']),
+                    }));
+                }
+                if (data['Error Message']) throw new Error(data['Error Message']);
+                if (data['Note']) throw new Error('Rate limit');
+                return [];
+            }
+        }
+
         async function fetchCandles(symbol, interval, outputsize) {
             const src = currentSource();
             if (src === 'tradermade') return fetchTraderMadeTS(symbol, interval);
             if (src === 'polygon') return fetchPolygonTS(symbol, interval);
+            if (src === 'finnhub') return fetchFinnhubTS(symbol, interval);
+            if (src === 'fcsapi') return fetchFcsApiTS(symbol, interval);
+            if (src === 'alphavantage') return fetchAlphaVantageTS(symbol, interval);
             return fetchTwelveDataTS(symbol, interval, outputsize);
         }
 
@@ -1392,38 +1434,6 @@
                 updateAdvisorPanel(advisorState);
             }
         }
-
-        // --- Settings UI ---
-        const settingsBar = document.getElementById('settingsBar');
-        const settingsToggle = document.getElementById('settingsToggle');
-        const chartDataSourceEl = document.getElementById('chartDataSource');
-        const chartApiKeyEl = document.getElementById('chartApiKey');
-
-        settingsToggle.addEventListener('click', () => {
-            settingsBar.classList.toggle('hidden');
-        });
-
-        chartDataSourceEl.value = loadChartSource();
-        chartApiKeyEl.value = getChartApiKey(loadChartSource());
-
-        chartDataSourceEl.addEventListener('change', () => {
-            const src = chartDataSourceEl.value;
-            localStorage.setItem(CHART_SOURCE_KEY, src);
-            chartApiKeyEl.value = getChartApiKey(src);
-        });
-
-        window.saveChartSettings = function() {
-            const src = chartDataSourceEl.value;
-            localStorage.setItem(CHART_SOURCE_KEY, src);
-            const keys = loadChartApiKeys();
-            keys[src] = chartApiKeyEl.value.trim();
-            localStorage.setItem(CHART_APIKEYS_KEY, JSON.stringify(keys));
-            // Reload with new source
-            stopPolling();
-            overlay.classList.remove('hidden');
-            overlay.innerHTML = '<div class="overlay-content"><div class="spinner"></div><div>Загрузка...</div></div>';
-            init();
-        };
 
         // --- Init ---
         async function init() {

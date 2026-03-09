@@ -221,6 +221,7 @@
         <div class="header-left">
             <h1>Сканер пар</h1>
             <a href="index.html">&larr; График</a>
+            <a href="settings.html">&#9881; API</a>
         </div>
         <div class="header-right">
             <button id="scanBtn" onclick="scanOnce()">Сканировать</button>
@@ -232,6 +233,9 @@
             <option value="twelvedata">Twelve Data</option>
             <option value="tradermade">TraderMade</option>
             <option value="polygon">Polygon.io</option>
+            <option value="finnhub">Finnhub</option>
+            <option value="fcsapi">FCS API</option>
+            <option value="alphavantage">Alpha Vantage</option>
         </select>
         <label>API ключ:</label>
         <input type="text" id="apiKeyInput" placeholder="Введите API ключ" spellcheck="false" onchange="saveSettings()">
@@ -271,21 +275,12 @@
     (function() {
         // --- Data source configs ---
         const DATA_SOURCES = {
-            twelvedata: {
-                label: 'Twelve Data',
-                defaultKey: '8694f4e28a974a0eba808458ceb33bfb',
-                rateDelay: 12000,
-            },
-            tradermade: {
-                label: 'TraderMade',
-                defaultKey: '',
-                rateDelay: 3000,
-            },
-            polygon: {
-                label: 'Polygon.io',
-                defaultKey: '',
-                rateDelay: 12000,
-            },
+            twelvedata: { label: 'Twelve Data', defaultKey: '8694f4e28a974a0eba808458ceb33bfb', rateDelay: 12000 },
+            tradermade: { label: 'TraderMade', defaultKey: '', rateDelay: 3000 },
+            polygon:    { label: 'Polygon.io', defaultKey: '', rateDelay: 12000 },
+            finnhub:    { label: 'Finnhub', defaultKey: '', rateDelay: 1500 },
+            fcsapi:     { label: 'FCS API', defaultKey: '', rateDelay: 3000 },
+            alphavantage: { label: 'Alpha Vantage', defaultKey: '', rateDelay: 15000 },
         };
 
         const SOURCE_STORAGE_KEY = 'scannerDataSource';
@@ -401,7 +396,13 @@
 
         function getApiKey(source) {
             const saved = loadApiKeys();
-            return saved[source] || DATA_SOURCES[source].defaultKey || '';
+            if (saved[source]) return saved[source];
+            // Fallback to chart page keys
+            try {
+                const chartKeys = JSON.parse(localStorage.getItem('chartApiKeys'));
+                if (chartKeys && chartKeys[source]) return chartKeys[source];
+            } catch {}
+            return DATA_SOURCES[source].defaultKey || '';
         }
 
         window.saveSettings = function() {
@@ -707,12 +708,71 @@
             return [];
         }
 
+        // --- Finnhub ---
+        async function fetchFinnhub(symbol, interval) {
+            const pair = pairConcat(symbol);
+            const fhSymbol = 'OANDA:' + pair.slice(0,3) + '_' + pair.slice(3);
+            const resolution = interval === '1h' ? '60' : interval === '30min' ? '30' : '60';
+            const to = Math.floor(Date.now() / 1000);
+            const from = to - 90 * 86400;
+            const url = `https://finnhub.io/api/v1/forex/candle?symbol=${fhSymbol}&resolution=${resolution}&from=${from}&to=${to}&token=${getApiKey('finnhub')}`;
+            const res = await fetch(url);
+            const data = await res.json();
+            if (data.s === 'ok' && data.c && data.c.length > 0) {
+                return data.t.map((t, i) => ({
+                    time: t, open: data.o[i], high: data.h[i], low: data.l[i], close: data.c[i],
+                }));
+            }
+            if (data.error) throw new Error(data.error);
+            return [];
+        }
+
+        // --- FCS API ---
+        async function fetchFcsApi(symbol, interval) {
+            const period = interval === '1h' ? '1h' : interval === '30min' ? '30m' : '1h';
+            const url = `https://fcsapi.com/api-v3/forex/history?symbol=${symbol}&period=${period}&access_key=${getApiKey('fcsapi')}`;
+            const res = await fetch(url);
+            const data = await res.json();
+            if (data.response && Array.isArray(data.response) && data.response.length > 0) {
+                return data.response.map(q => ({
+                    time: parseInt(q.t) || parseDatetime(q.tm),
+                    open: parseFloat(q.o), high: parseFloat(q.h),
+                    low: parseFloat(q.l), close: parseFloat(q.c),
+                }));
+            }
+            if (data.msg) throw new Error(data.msg);
+            return [];
+        }
+
+        // --- Alpha Vantage ---
+        async function fetchAlphaVantage(symbol, interval) {
+            const parts = symbol.split('/');
+            const ivParam = interval === '30min' ? '30min' : '60min';
+            const url = `https://www.alphavantage.co/query?function=FX_INTRADAY&from_symbol=${parts[0]}&to_symbol=${parts[1]}&interval=${ivParam}&outputsize=full&apikey=${getApiKey('alphavantage')}`;
+            const res = await fetch(url);
+            const data = await res.json();
+            const tsKey = Object.keys(data).find(k => k.startsWith('Time Series'));
+            if (tsKey && data[tsKey]) {
+                return Object.entries(data[tsKey]).reverse().map(([dt, v]) => ({
+                    time: parseDatetime(dt),
+                    open: parseFloat(v['1. open']), high: parseFloat(v['2. high']),
+                    low: parseFloat(v['3. low']), close: parseFloat(v['4. close']),
+                }));
+            }
+            if (data['Error Message']) throw new Error(data['Error Message']);
+            if (data['Note']) throw new Error('Rate limit');
+            return [];
+        }
+
         // --- Universal fetch with retry ---
         async function fetchTimeSeries(symbol, interval, retries = 3) {
             const source = getDataSource();
-            const fetchFn = source === 'tradermade' ? fetchTraderMade
-                          : source === 'polygon' ? fetchPolygon
-                          : fetchTwelveData;
+            const fetchFns = {
+                twelvedata: fetchTwelveData, tradermade: fetchTraderMade,
+                polygon: fetchPolygon, finnhub: fetchFinnhub,
+                fcsapi: fetchFcsApi, alphavantage: fetchAlphaVantage,
+            };
+            const fetchFn = fetchFns[source] || fetchTwelveData;
             for (let attempt = 0; attempt <= retries; attempt++) {
                 try {
                     return await fetchFn(symbol, interval);
