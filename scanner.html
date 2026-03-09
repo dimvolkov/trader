@@ -733,13 +733,29 @@
             const url = `https://fcsapi.com/api-v3/forex/history?symbol=${symbol}&period=${period}&access_key=${getApiKey('fcsapi')}`;
             const res = await fetch(url);
             const data = await res.json();
-            console.log('FCS API raw response:', JSON.stringify(data).substring(0, 500));
-            // Check for API errors (status can be boolean, number, or string)
-            if (!data.response || data.code === 101 || data.code === 102 ||
-                String(data.status).toLowerCase() === 'false' || data.status === 0) {
+            console.log('FCS API raw response:', JSON.stringify(data).substring(0, 1000));
+            console.log('FCS API keys:', Object.keys(data), 'response type:', typeof data.response, 'response value:', data.response);
+            // Check for real API errors (not "Successfully" with empty response)
+            const isError = data.code === 101 || data.code === 102 ||
+                String(data.status).toLowerCase() === 'false' || data.status === 0;
+            if (isError) {
                 throw new Error(data.msg || data.message || 'FCS API error');
             }
-            let candles = data.response;
+            // Try to find candle data in any top-level field
+            let candles = data.response || data.data || data.results || data.candles;
+            if (!candles) {
+                // Maybe the data itself is the array or candles are under another key
+                const candidateKeys = Object.keys(data).filter(k => !['status','msg','message','code','info','s'].includes(k));
+                for (const k of candidateKeys) {
+                    const val = data[k];
+                    if (val && (Array.isArray(val) || (typeof val === 'object' && Object.keys(val).length > 0))) {
+                        candles = val;
+                        console.log('FCS API: found data under key:', k);
+                        break;
+                    }
+                }
+            }
+            if (!candles) throw new Error('FCS API: нет данных. Ответ: ' + JSON.stringify(data).substring(0, 200));
             if (candles && !Array.isArray(candles)) candles = Object.values(candles);
             if (!candles || candles.length === 0) throw new Error('Нет данных от FCS API');
             const first = candles[0];
