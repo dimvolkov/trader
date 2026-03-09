@@ -86,6 +86,52 @@
         }
         .pair-select:hover { border-color: #2962ff; }
         .pair-select:focus { border-color: #2962ff; }
+        .settings-bar {
+            padding: 8px 20px;
+            background: #1a1e2a;
+            border-bottom: 1px solid #2a2e39;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            font-size: 13px;
+        }
+        .settings-bar label {
+            color: #787b86;
+            font-size: 12px;
+        }
+        .settings-bar select {
+            background: #2a2e39;
+            color: #fff;
+            border: 1px solid #363a45;
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 13px;
+            cursor: pointer;
+            outline: none;
+        }
+        .settings-bar input[type="text"] {
+            background: #2a2e39;
+            color: #fff;
+            border: 1px solid #363a45;
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 13px;
+            outline: none;
+            width: 260px;
+            font-family: monospace;
+        }
+        .settings-bar input:focus, .settings-bar select:hover { border-color: #2962ff; }
+        .settings-toggle {
+            background: none;
+            border: none;
+            color: #787b86;
+            cursor: pointer;
+            font-size: 18px;
+            padding: 0 4px;
+            line-height: 1;
+        }
+        .settings-toggle:hover { color: #fff; }
+        .settings-bar.hidden { display: none; }
         .chart-wrapper {
             flex: 1;
             display: flex;
@@ -204,7 +250,19 @@
             <button data-type="candle" class="active">Candle</button>
             <button class="advisor-btn" id="advisorBtn">Советник</button>
             <a href="scanner.html" style="background:#2a2e39;color:#d1d4dc;border:1px solid #363a45;padding:6px 14px;border-radius:4px;font-size:13px;text-decoration:none;display:inline-block;transition:background 0.2s;" onmouseover="this.style.background='#363a45'" onmouseout="this.style.background='#2a2e39'">Сканер</a>
+            <button class="settings-toggle" id="settingsToggle" title="Настройки API">&#9881;</button>
         </div>
+    </div>
+    <div class="settings-bar hidden" id="settingsBar">
+        <label>Источник:</label>
+        <select id="chartDataSource">
+            <option value="twelvedata">Twelve Data</option>
+            <option value="tradermade">TraderMade</option>
+            <option value="polygon">Polygon.io</option>
+        </select>
+        <label>API ключ:</label>
+        <input type="text" id="chartApiKey" placeholder="Введите API ключ" spellcheck="false">
+        <button class="controls" style="padding:4px 10px;font-size:12px" onclick="saveChartSettings()">Сохранить</button>
     </div>
     <div class="chart-wrapper">
         <div class="chart-container" id="chartContainer">
@@ -229,9 +287,30 @@
     <script src="lightweight-charts.js"></script>
     <script>
     (function() {
-        const API_KEY = '8694f4e28a974a0eba808458ceb33bfb';
+        // --- Data source configs ---
+        const DATA_SOURCES = {
+            twelvedata: { label: 'Twelve Data', defaultKey: '8694f4e28a974a0eba808458ceb33bfb' },
+            tradermade: { label: 'TraderMade', defaultKey: '' },
+            polygon:    { label: 'Polygon.io', defaultKey: '' },
+        };
+        const CHART_SOURCE_KEY = 'chartDataSource';
+        const CHART_APIKEYS_KEY = 'chartApiKeys';
+
+        function loadChartSource() {
+            try { const s = localStorage.getItem(CHART_SOURCE_KEY); if (s && DATA_SOURCES[s]) return s; } catch {}
+            return 'twelvedata';
+        }
+        function loadChartApiKeys() {
+            try { const k = JSON.parse(localStorage.getItem(CHART_APIKEYS_KEY)); if (k && typeof k === 'object') return k; } catch {}
+            return {};
+        }
+        function getChartApiKey(src) {
+            const keys = loadChartApiKeys();
+            return keys[src] || DATA_SOURCES[src].defaultKey || '';
+        }
+        function currentSource() { return document.getElementById('chartDataSource').value; }
+
         let currentSymbol = new URLSearchParams(window.location.search).get('pair') || 'USD/RUB';
-        const API_BASE = 'https://api.twelvedata.com';
         const POLL_INTERVAL = 10000;
 
         const PAIRS = {
@@ -429,6 +508,85 @@
             return Date.UTC(+d[0], +d[1] - 1, +d[2], +t[0], +t[1], +t[2] || 0) / 1000;
         }
 
+        // --- Multi-source fetch ---
+        function pairConcat(symbol) { return symbol.replace('/', ''); }
+
+        async function fetchTwelveDataTS(symbol, interval, outputsize) {
+            const url = `https://api.twelvedata.com/time_series?symbol=${symbol}&interval=${interval}&outputsize=${outputsize || 500}&apikey=${getChartApiKey('twelvedata')}`;
+            const res = await fetch(url);
+            const data = await res.json();
+            if (data.status === 'ok' && data.values) {
+                return data.values.reverse().map(v => ({
+                    time: parseDatetime(v.datetime),
+                    open: parseFloat(v.open), high: parseFloat(v.high),
+                    low: parseFloat(v.low), close: parseFloat(v.close),
+                }));
+            }
+            if (data.code === 429) throw new Error('API лимит исчерпан (429)');
+            return [];
+        }
+
+        async function fetchTraderMadeTS(symbol, interval) {
+            const pair = pairConcat(symbol);
+            let tmInterval, tmPeriod = '';
+            if (interval === '1h') { tmInterval = 'hourly'; }
+            else if (interval === '30min') { tmInterval = 'minute'; tmPeriod = '&period=30'; }
+            else if (interval === '15min') { tmInterval = 'minute'; tmPeriod = '&period=15'; }
+            else if (interval === '1min') { tmInterval = 'minute'; tmPeriod = '&period=1'; }
+            else if (interval === '1day') { tmInterval = 'daily'; }
+            else if (interval === '1week') { tmInterval = 'daily'; }
+            else if (interval === '1month') { tmInterval = 'daily'; }
+            else { tmInterval = 'hourly'; }
+            const daysBack = tmInterval === 'minute' ? 4 : 60;
+            const now = new Date();
+            const from = new Date(now.getTime() - daysBack * 86400000);
+            const url = `https://marketdata.tradermade.com/api/v1/timeseries?currency=${pair}&api_key=${getChartApiKey('tradermade')}&start_date=${from.toISOString().slice(0,10)}&end_date=${now.toISOString().slice(0,10)}&interval=${tmInterval}${tmPeriod}&format=records`;
+            const res = await fetch(url);
+            const data = await res.json();
+            if (data.quotes && Array.isArray(data.quotes)) {
+                return data.quotes.map(q => ({
+                    time: parseDatetime(q.date),
+                    open: parseFloat(q.open), high: parseFloat(q.high),
+                    low: parseFloat(q.low), close: parseFloat(q.close),
+                }));
+            }
+            if (data.error) throw new Error(data.error);
+            return [];
+        }
+
+        async function fetchPolygonTS(symbol, interval) {
+            const ticker = 'C:' + pairConcat(symbol);
+            let multiplier, timespan;
+            if (interval === '1min') { multiplier = 1; timespan = 'minute'; }
+            else if (interval === '15min') { multiplier = 15; timespan = 'minute'; }
+            else if (interval === '30min') { multiplier = 30; timespan = 'minute'; }
+            else if (interval === '1h') { multiplier = 1; timespan = 'hour'; }
+            else if (interval === '1day') { multiplier = 1; timespan = 'day'; }
+            else if (interval === '1week') { multiplier = 1; timespan = 'week'; }
+            else if (interval === '1month') { multiplier = 1; timespan = 'month'; }
+            else { multiplier = 1; timespan = 'hour'; }
+            const now = new Date();
+            const from = new Date(now.getTime() - 90 * 86400000);
+            const url = `https://api.polygon.io/v2/aggs/ticker/${ticker}/range/${multiplier}/${timespan}/${from.toISOString().slice(0,10)}/${now.toISOString().slice(0,10)}?adjusted=true&sort=asc&limit=5000&apiKey=${getChartApiKey('polygon')}`;
+            const res = await fetch(url);
+            const data = await res.json();
+            if (data.status === 'OK' && data.results) {
+                return data.results.map(r => ({
+                    time: Math.floor(r.t / 1000),
+                    open: r.o, high: r.h, low: r.l, close: r.c,
+                }));
+            }
+            if (data.status === 'ERROR') throw new Error(data.error || data.message || 'API error');
+            return [];
+        }
+
+        async function fetchCandles(symbol, interval, outputsize) {
+            const src = currentSource();
+            if (src === 'tradermade') return fetchTraderMadeTS(symbol, interval);
+            if (src === 'polygon') return fetchPolygonTS(symbol, interval);
+            return fetchTwelveDataTS(symbol, interval, outputsize);
+        }
+
         function getCandleTime(ts) {
             const sec = Math.floor(ts / 1000);
             const tf = TF_CONFIG[currentTF];
@@ -479,50 +637,28 @@
         async function loadHistory() {
             try {
                 const tf = TF_CONFIG[currentTF];
-                const url = `${API_BASE}/time_series?symbol=${currentSymbol}&interval=${tf.interval}&outputsize=${tf.outputsize}&apikey=${API_KEY}`;
-                const res = await fetch(url);
-                const data = await res.json();
+                const candles = await fetchCandles(currentSymbol, tf.interval, tf.outputsize);
 
-                if (data.status === 'ok' && data.values) {
-                    const values = data.values.reverse();
-                    const candles = [];
-                    const lineData = [];
-
-                    for (const v of values) {
-                        const time = parseDatetime(v.datetime);
-                        const o = parseFloat(v.open);
-                        const h = parseFloat(v.high);
-                        const l = parseFloat(v.low);
-                        const c = parseFloat(v.close);
-                        candles.push({ time, open: o, high: h, low: l, close: c });
-                        lineData.push({ time, value: c });
-                    }
-
+                if (candles.length > 0) {
+                    const lineData = candles.map(c => ({ time: c.time, value: c.close }));
                     candleSeries.setData(candles);
                     lineSeries.setData(lineData);
 
-                    if (candles.length > 0) {
-                        const last = candles[candles.length - 1];
-                        openPrice = candles[0].open;
-                        currentCandle = last;
-                        updatePrice(last.close);
-                        drawSupportResistance(candles);
-                        buildPeriodSeparators(candles);
-                        flushMarkers();
-                    }
+                    const last = candles[candles.length - 1];
+                    openPrice = candles[0].open;
+                    currentCandle = last;
+                    updatePrice(last.close);
+                    drawSupportResistance(candles);
+                    buildPeriodSeparators(candles);
+                    flushMarkers();
                     overlay.classList.add('hidden');
                     return true;
                 } else {
-                    console.warn('API response:', data);
-                    if (data.code === 429) {
-                        showOverlayError('API лимит исчерпан (429).<br>Дневной лимит Twelve Data обнулится завтра.');
-                    } else {
-                        showOverlayError('Ошибка загрузки данных');
-                    }
+                    showOverlayError('Нет данных от API');
                 }
             } catch (e) {
                 console.warn('History load failed:', e);
-                showOverlayError('Ошибка соединения с API');
+                showOverlayError(e.message || 'Ошибка соединения с API');
             }
             return false;
         }
@@ -532,11 +668,20 @@
 
         async function pollQuote() {
             try {
-                const url = `${API_BASE}/price?symbol=${currentSymbol}&apikey=${API_KEY}`;
-                const res = await fetch(url);
-                const data = await res.json();
-                if (data.price) {
-                    handleTick(parseFloat(data.price), Date.now());
+                const src = currentSource();
+                if (src === 'twelvedata') {
+                    const url = `https://api.twelvedata.com/price?symbol=${currentSymbol}&apikey=${getChartApiKey('twelvedata')}`;
+                    const res = await fetch(url);
+                    const data = await res.json();
+                    if (data.price) handleTick(parseFloat(data.price), Date.now());
+                } else {
+                    // For other sources, fetch latest candle
+                    const tf = TF_CONFIG[currentTF];
+                    const candles = await fetchCandles(currentSymbol, tf.interval, 5);
+                    if (candles.length > 0) {
+                        const last = candles[candles.length - 1];
+                        handleTick(last.close, Date.now());
+                    }
                 }
             } catch (e) {
                 console.warn('Poll failed:', e);
@@ -639,26 +784,8 @@
         // ============================================================
 
         async function fetchAdvisorData(symbol) {
-            const fetchTF = async (interval) => {
-                const url = `${API_BASE}/time_series?symbol=${symbol}&interval=${interval}&outputsize=500&apikey=${API_KEY}`;
-                const res = await fetch(url);
-                const data = await res.json();
-                if (data.status === 'ok' && data.values) {
-                    return data.values.reverse().map(v => ({
-                        time: parseDatetime(v.datetime),
-                        open: parseFloat(v.open),
-                        high: parseFloat(v.high),
-                        low: parseFloat(v.low),
-                        close: parseFloat(v.close),
-                    }));
-                }
-                return [];
-            };
-
-            const [h1, m30] = await Promise.all([
-                fetchTF('1h'),
-                fetchTF('30min'),
-            ]);
+            const h1 = await fetchCandles(symbol, '1h', 500);
+            const m30 = await fetchCandles(symbol, '30min', 500);
             return { h1, m30 };
         }
 
@@ -1266,6 +1393,38 @@
             }
         }
 
+        // --- Settings UI ---
+        const settingsBar = document.getElementById('settingsBar');
+        const settingsToggle = document.getElementById('settingsToggle');
+        const chartDataSourceEl = document.getElementById('chartDataSource');
+        const chartApiKeyEl = document.getElementById('chartApiKey');
+
+        settingsToggle.addEventListener('click', () => {
+            settingsBar.classList.toggle('hidden');
+        });
+
+        chartDataSourceEl.value = loadChartSource();
+        chartApiKeyEl.value = getChartApiKey(loadChartSource());
+
+        chartDataSourceEl.addEventListener('change', () => {
+            const src = chartDataSourceEl.value;
+            localStorage.setItem(CHART_SOURCE_KEY, src);
+            chartApiKeyEl.value = getChartApiKey(src);
+        });
+
+        window.saveChartSettings = function() {
+            const src = chartDataSourceEl.value;
+            localStorage.setItem(CHART_SOURCE_KEY, src);
+            const keys = loadChartApiKeys();
+            keys[src] = chartApiKeyEl.value.trim();
+            localStorage.setItem(CHART_APIKEYS_KEY, JSON.stringify(keys));
+            // Reload with new source
+            stopPolling();
+            overlay.classList.remove('hidden');
+            overlay.innerHTML = '<div class="overlay-content"><div class="spinner"></div><div>Загрузка...</div></div>';
+            init();
+        };
+
         // --- Init ---
         async function init() {
             const loaded = await loadHistory();
@@ -1276,7 +1435,6 @@
                 }
             } else {
                 setStatus('Failed to load data', false);
-                overlay.classList.add('hidden');
             }
         }
 
