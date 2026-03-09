@@ -1154,7 +1154,14 @@
                     if (scanAbort) return;
 
                     // Analyze
+                    console.log(`[${pair}] H1 candles: ${h1.length}, M30 candles: ${m30.length}`);
                     const result = analyzePair(h1, m30);
+                    console.log(`[${pair}] Analysis:`, JSON.stringify({
+                        trend: result.trend, phase: result.phase,
+                        reversal: result.reversal, s1: result.s1, s2: result.s2, s3: result.s3,
+                        hasEntry: !!result.entry, rr: result.rr,
+                        entryDetail: result.entry ? { valid: result.entry.valid, direction: result.entry.direction, reason: result.entry.reason } : null
+                    }));
                     pairResults[pair] = result;
 
                     // Update row
