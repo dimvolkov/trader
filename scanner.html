@@ -1,0 +1,798 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Сканер пар — Forex</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            background: #131722;
+            color: #d1d4dc;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+        }
+        .header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 12px 20px;
+            background: #1e222d;
+            border-bottom: 1px solid #2a2e39;
+            flex-wrap: wrap;
+            gap: 8px;
+        }
+        .header-left {
+            display: flex;
+            align-items: center;
+            gap: 16px;
+        }
+        .header-left h1 {
+            font-size: 18px;
+            font-weight: 700;
+            color: #fff;
+        }
+        .header-left a {
+            color: #2962ff;
+            text-decoration: none;
+            font-size: 13px;
+        }
+        .header-left a:hover { text-decoration: underline; }
+        .header-right {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        button {
+            background: #2a2e39;
+            color: #d1d4dc;
+            border: 1px solid #363a45;
+            padding: 6px 14px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 13px;
+            transition: background 0.2s;
+        }
+        button:hover { background: #363a45; }
+        button.active {
+            background: #26a69a;
+            border-color: #26a69a;
+            color: #fff;
+        }
+        button.stop {
+            background: #ef5350;
+            border-color: #ef5350;
+            color: #fff;
+        }
+        select {
+            background: #2a2e39;
+            color: #fff;
+            border: 1px solid #363a45;
+            padding: 6px 10px;
+            border-radius: 4px;
+            font-size: 13px;
+            cursor: pointer;
+            outline: none;
+        }
+        select:hover { border-color: #2962ff; }
+        .watchlist-config {
+            padding: 12px 20px;
+            background: #1a1e2a;
+            border-bottom: 1px solid #2a2e39;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            flex-wrap: wrap;
+        }
+        .watchlist-config label {
+            font-size: 12px;
+            color: #787b86;
+        }
+        .table-wrapper {
+            flex: 1;
+            overflow-x: auto;
+            padding: 16px 20px;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 13px;
+        }
+        th {
+            background: #1e222d;
+            color: #787b86;
+            font-weight: 600;
+            text-align: left;
+            padding: 10px 12px;
+            border-bottom: 1px solid #2a2e39;
+            white-space: nowrap;
+            position: sticky;
+            top: 0;
+        }
+        td {
+            padding: 10px 12px;
+            border-bottom: 1px solid #1e222d;
+            white-space: nowrap;
+        }
+        tr { transition: background 0.3s; }
+        tr.clickable { cursor: pointer; }
+        tr.clickable:hover { background: #1e222d; }
+        tr.signal-long {
+            animation: pulseGreen 2s ease-in-out 3;
+        }
+        tr.signal-short {
+            animation: pulseRed 2s ease-in-out 3;
+        }
+        @keyframes pulseGreen {
+            0%, 100% { background: transparent; }
+            50% { background: rgba(38, 166, 154, 0.15); }
+        }
+        @keyframes pulseRed {
+            0%, 100% { background: transparent; }
+            50% { background: rgba(239, 83, 80, 0.15); }
+        }
+        .up { color: #26a69a; }
+        .down { color: #ef5350; }
+        .neutral { color: #787b86; }
+        .val { color: #fff; font-weight: 600; }
+        .signal-ok { color: #00e676; }
+        .entry-long { color: #26a69a; font-weight: 700; }
+        .entry-short { color: #ef5350; font-weight: 700; }
+        .rr-good { color: #00e676; font-weight: 700; }
+        .status-bar {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 6px 20px;
+            background: #1e222d;
+            border-top: 1px solid #2a2e39;
+            font-size: 12px;
+            color: #787b86;
+        }
+        .status-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: #ef5350;
+        }
+        .status-dot.active { background: #26a69a; }
+        .spinner-inline {
+            display: inline-block;
+            width: 12px;
+            height: 12px;
+            border: 2px solid #2a2e39;
+            border-top-color: #2962ff;
+            border-radius: 50%;
+            animation: spin 0.8s linear infinite;
+            vertical-align: middle;
+            margin-right: 4px;
+        }
+        @keyframes spin { to { transform: rotate(360deg); } }
+        .scanning-pair { color: #2962ff; }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <div class="header-left">
+            <h1>Сканер пар</h1>
+            <a href="index.html">&larr; График</a>
+        </div>
+        <div class="header-right">
+            <button id="scanBtn" onclick="toggleScanner()">Старт</button>
+        </div>
+    </div>
+    <div class="watchlist-config">
+        <label>Watchlist:</label>
+        <select id="pair1"></select>
+        <select id="pair2"></select>
+        <select id="pair3"></select>
+        <select id="pair4"></select>
+    </div>
+    <div class="table-wrapper">
+        <table>
+            <thead>
+                <tr>
+                    <th>Пара</th>
+                    <th>Тренд</th>
+                    <th>Фаза</th>
+                    <th>Имп/Корр</th>
+                    <th>Разворот</th>
+                    <th>S1</th>
+                    <th>S2</th>
+                    <th>S3</th>
+                    <th>Вход</th>
+                    <th>R:R</th>
+                    <th>Обновлено</th>
+                </tr>
+            </thead>
+            <tbody id="scannerBody">
+            </tbody>
+        </table>
+    </div>
+    <div class="status-bar">
+        <div class="status-dot" id="statusDot"></div>
+        <span id="statusText">Остановлен</span>
+        <span style="margin-left: auto" id="cycleInfo">—</span>
+    </div>
+
+    <script>
+    (function() {
+        const API_KEY = '8694f4e28a974a0eba808458ceb33bfb';
+        const API_BASE = 'https://api.twelvedata.com';
+
+        const PAIRS = {
+            'RUB пары': [
+                'USD/RUB', 'EUR/RUB', 'GBP/RUB', 'CNY/RUB', 'CHF/RUB', 'JPY/RUB',
+                'CAD/RUB', 'AUD/RUB', 'BRL/RUB', 'INR/RUB', 'PLN/RUB', 'SEK/RUB',
+                'SGD/RUB', 'ZAR/RUB', 'UAH/RUB', 'AZN/RUB', 'GEL/RUB', 'KGS/RUB',
+                'TJS/RUB', 'MDL/RUB', 'BGN/RUB',
+            ],
+            'Мажоры': [
+                'EUR/USD', 'GBP/USD', 'USD/JPY', 'USD/CHF', 'AUD/USD', 'USD/CAD', 'NZD/USD',
+            ],
+            'Кроссы EUR': [
+                'EUR/GBP', 'EUR/JPY', 'EUR/CHF', 'EUR/AUD', 'EUR/CAD', 'EUR/NZD',
+            ],
+            'Кроссы GBP': [
+                'GBP/JPY', 'GBP/CHF', 'GBP/AUD', 'GBP/CAD', 'GBP/NZD',
+            ],
+            'Экзотика': [
+                'USD/TRY', 'USD/ZAR', 'USD/MXN', 'USD/BRL', 'USD/INR', 'USD/CNY',
+                'USD/SGD', 'USD/HKD', 'USD/PLN', 'USD/SEK', 'USD/NOK', 'USD/DKK',
+                'USD/THB', 'USD/KRW', 'USD/ARS', 'USD/CLP',
+            ],
+        };
+
+        const DEFAULT_WATCHLIST = ['EUR/USD', 'GBP/USD', 'USD/JPY', 'USD/CHF'];
+        const STORAGE_KEY = 'scannerWatchlist';
+
+        // --- State ---
+        let scanning = false;
+        let scanAbort = false;
+        let cycleTimer = null;
+        let notifiedEntries = new Set(); // track notified pair+direction to avoid spam
+
+        // --- DOM refs ---
+        const scanBtn = document.getElementById('scanBtn');
+        const statusDot = document.getElementById('statusDot');
+        const statusText = document.getElementById('statusText');
+        const cycleInfo = document.getElementById('cycleInfo');
+        const scannerBody = document.getElementById('scannerBody');
+        const pairSelects = [
+            document.getElementById('pair1'),
+            document.getElementById('pair2'),
+            document.getElementById('pair3'),
+            document.getElementById('pair4'),
+        ];
+
+        // --- Populate pair selectors ---
+        function populateSelectors() {
+            const saved = loadWatchlist();
+            pairSelects.forEach((sel, idx) => {
+                sel.innerHTML = '';
+                for (const [group, pairs] of Object.entries(PAIRS)) {
+                    const optgroup = document.createElement('optgroup');
+                    optgroup.label = group;
+                    for (const pair of pairs) {
+                        const opt = document.createElement('option');
+                        opt.value = pair;
+                        opt.textContent = pair;
+                        if (pair === saved[idx]) opt.selected = true;
+                        optgroup.appendChild(opt);
+                    }
+                    sel.appendChild(optgroup);
+                }
+                sel.addEventListener('change', saveWatchlist);
+            });
+        }
+
+        function getWatchlist() {
+            return pairSelects.map(s => s.value);
+        }
+
+        function loadWatchlist() {
+            try {
+                const saved = JSON.parse(localStorage.getItem(STORAGE_KEY));
+                if (Array.isArray(saved) && saved.length === 4) return saved;
+            } catch {}
+            return DEFAULT_WATCHLIST;
+        }
+
+        function saveWatchlist() {
+            localStorage.setItem(STORAGE_KEY, JSON.stringify(getWatchlist()));
+        }
+
+        // --- Analysis functions (copied from index.html) ---
+
+        function parseDatetime(dt) {
+            const parts = dt.split(' ');
+            const d = parts[0].split('-');
+            if (parts.length === 1) {
+                return Date.UTC(+d[0], +d[1] - 1, +d[2]) / 1000;
+            }
+            const t = parts[1].split(':');
+            return Date.UTC(+d[0], +d[1] - 1, +d[2], +t[0], +t[1], +t[2] || 0) / 1000;
+        }
+
+        function findSwingPoints(candles, lookback) {
+            const swings = [];
+            for (let i = lookback; i < candles.length - lookback; i++) {
+                let isHigh = true;
+                let isLow = true;
+                for (let j = 1; j <= lookback; j++) {
+                    if (candles[i].high < candles[i - j].high || candles[i].high < candles[i + j].high) isHigh = false;
+                    if (candles[i].low > candles[i - j].low || candles[i].low > candles[i + j].low) isLow = false;
+                }
+                if (isHigh) swings.push({ index: i, time: candles[i].time, price: candles[i].high, type: 'high' });
+                if (isLow) swings.push({ index: i, time: candles[i].time, price: candles[i].low, type: 'low' });
+            }
+            swings.sort((a, b) => a.time - b.time);
+            return swings;
+        }
+
+        function determineTrend(swings) {
+            const highs = swings.filter(s => s.type === 'high');
+            const lows = swings.filter(s => s.type === 'low');
+            if (highs.length < 3 || lows.length < 3) return 'range';
+            const lastHighs = highs.slice(-3);
+            const lastLows = lows.slice(-3);
+            const hhCount = (lastHighs[1].price > lastHighs[0].price ? 1 : 0) + (lastHighs[2].price > lastHighs[1].price ? 1 : 0);
+            const hlCount = (lastLows[1].price > lastLows[0].price ? 1 : 0) + (lastLows[2].price > lastLows[1].price ? 1 : 0);
+            const lhCount = (lastHighs[1].price < lastHighs[0].price ? 1 : 0) + (lastHighs[2].price < lastHighs[1].price ? 1 : 0);
+            const llCount = (lastLows[1].price < lastLows[0].price ? 1 : 0) + (lastLows[2].price < lastLows[1].price ? 1 : 0);
+            if (hhCount >= 2 && hlCount >= 2) return 'up';
+            if (lhCount >= 2 && llCount >= 2) return 'down';
+            return 'range';
+        }
+
+        function segmentSwings(swings, trend) {
+            if (swings.length < 2) return [];
+            const alternating = [swings[0]];
+            for (let i = 1; i < swings.length; i++) {
+                const last = alternating[alternating.length - 1];
+                if (swings[i].type === last.type) {
+                    if (swings[i].type === 'high' && swings[i].price > last.price) alternating[alternating.length - 1] = swings[i];
+                    else if (swings[i].type === 'low' && swings[i].price < last.price) alternating[alternating.length - 1] = swings[i];
+                } else {
+                    alternating.push(swings[i]);
+                }
+            }
+            const segments = [];
+            for (let i = 0; i < alternating.length - 1; i++) {
+                const from = alternating[i];
+                const to = alternating[i + 1];
+                let segType;
+                if (trend === 'up') segType = (from.type === 'low' && to.type === 'high') ? 'impulse' : 'correction';
+                else if (trend === 'down') segType = (from.type === 'high' && to.type === 'low') ? 'impulse' : 'correction';
+                else segType = (i % 2 === 0) ? 'impulse' : 'correction';
+                segments.push({
+                    startTime: from.time, startPrice: from.price,
+                    endTime: to.time, endPrice: to.price,
+                    type: segType,
+                    size: Math.abs(to.price - from.price),
+                });
+            }
+            return segments;
+        }
+
+        function checkReversal(impulses) {
+            const corrections = impulses.filter(s => s.type === 'correction');
+            const imps = impulses.filter(s => s.type === 'impulse');
+            if (corrections.length === 0 || imps.length === 0) return { reversal: false, reason: 'Недостаточно данных' };
+            const lastCorr = corrections[corrections.length - 1];
+            const lastImp = imps[imps.length - 1];
+            if (lastCorr.size > lastImp.size) return { reversal: true, reason: `Корр > Имп` };
+            return { reversal: false, reason: 'Тренд продолжается' };
+        }
+
+        function constructLevels(impulses, trend, swings) {
+            const imps = impulses.filter(s => s.type === 'impulse');
+            if (imps.length === 0) return {};
+            const lastImp = imps[imps.length - 1];
+            const impulseEnd = lastImp.endPrice;
+            const impulseStart = lastImp.startPrice;
+            let target = null;
+            const relevantSwings = trend === 'up'
+                ? swings.filter(s => s.type === 'high' && s.price > impulseEnd)
+                : swings.filter(s => s.type === 'low' && s.price < impulseEnd);
+            if (relevantSwings.length > 0) {
+                relevantSwings.sort((a, b) => trend === 'up' ? a.price - b.price : b.price - a.price);
+                target = relevantSwings[0].price;
+            } else {
+                const size = Math.abs(impulseEnd - impulseStart);
+                target = trend === 'up' ? impulseEnd + size : impulseEnd - size;
+            }
+            return { impulseEnd, impulseStart, target };
+        }
+
+        function detectSlom(m30Candles, trendDir, h1Levels) {
+            if (!h1Levels.impulseEnd) return null;
+            const m30Swings = findSwingPoints(m30Candles, 4);
+            if (m30Swings.length < 4) return null;
+            const recentSwings = m30Swings.slice(-10);
+            const microHighs = recentSwings.filter(s => s.type === 'high');
+            const microLows = recentSwings.filter(s => s.type === 'low');
+            if (microHighs.length < 2 || microLows.length < 2) return null;
+            const lastMicroHighs = microHighs.slice(-2);
+            const lastMicroLows = microLows.slice(-2);
+            let signal1 = null, signal2 = null, signal3 = null;
+
+            if (trendDir === 'up') {
+                const microTop = lastMicroHighs[lastMicroHighs.length - 1];
+                const breakLevel = lastMicroHighs[lastMicroHighs.length - 2].price;
+                if (microTop.price > breakLevel) {
+                    signal1 = { price: breakLevel, time: microTop.time, label: `пробой ${breakLevel.toFixed(4)}` };
+                    const pullbackZone = breakLevel + (microTop.price - breakLevel) * 0.5;
+                    for (let i = microTop.index + 1; i < m30Candles.length; i++) {
+                        if (m30Candles[i].low <= pullbackZone && m30Candles[i].low >= breakLevel * 0.999) {
+                            signal2 = { price: m30Candles[i].low, time: m30Candles[i].time, label: `откат к ${m30Candles[i].low.toFixed(4)}` };
+                            break;
+                        }
+                    }
+                    if (signal2) {
+                        for (let i = m30Candles.findIndex(c => c.time >= signal2.time) + 1; i < m30Candles.length; i++) {
+                            if (m30Candles[i].high > microTop.price) {
+                                signal3 = { price: m30Candles[i].high, time: m30Candles[i].time, label: `пробой ${microTop.price.toFixed(4)}` };
+                                break;
+                            }
+                        }
+                    }
+                }
+            } else if (trendDir === 'down') {
+                const microBottom = lastMicroLows[lastMicroLows.length - 1];
+                const breakLevel = lastMicroLows[lastMicroLows.length - 2].price;
+                if (microBottom.price < breakLevel) {
+                    signal1 = { price: breakLevel, time: microBottom.time, label: `пробой ${breakLevel.toFixed(4)}` };
+                    const pullbackZone = breakLevel - (breakLevel - microBottom.price) * 0.5;
+                    for (let i = microBottom.index + 1; i < m30Candles.length; i++) {
+                        if (m30Candles[i].high >= pullbackZone && m30Candles[i].high <= breakLevel * 1.001) {
+                            signal2 = { price: m30Candles[i].high, time: m30Candles[i].time, label: `откат к ${m30Candles[i].high.toFixed(4)}` };
+                            break;
+                        }
+                    }
+                    if (signal2) {
+                        for (let i = m30Candles.findIndex(c => c.time >= signal2.time) + 1; i < m30Candles.length; i++) {
+                            if (m30Candles[i].low < microBottom.price) {
+                                signal3 = { price: m30Candles[i].low, time: m30Candles[i].time, label: `пробой ${microBottom.price.toFixed(4)}` };
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+            if (!signal1) return null;
+            return { signal1, signal2: signal2 || null, signal3: signal3 || null, complete: !!(signal1 && signal2 && signal3) };
+        }
+
+        function computeEntry(slom, levels, trend) {
+            if (!slom || !slom.signal2 || !levels.target) return null;
+            const entry = slom.signal2.price;
+            let stop, take;
+            if (trend === 'up') {
+                stop = slom.signal1.price - Math.abs(slom.signal2.price - slom.signal1.price) * 0.5;
+                take = levels.target;
+            } else {
+                stop = slom.signal1.price + Math.abs(slom.signal2.price - slom.signal1.price) * 0.5;
+                take = levels.target;
+            }
+            const rr = Math.abs(take - entry) / Math.abs(entry - stop);
+            if (rr < 2.0) return { entry, stop, take, rr, valid: false, direction: trend, reason: `R:R = ${rr.toFixed(2)} < 2.0` };
+            return { entry, stop, take, rr, direction: trend, valid: true, reason: `R:R = ${rr.toFixed(2)}` };
+        }
+
+        // --- Rate-limited fetch ---
+        function delay(ms) {
+            return new Promise(resolve => setTimeout(resolve, ms));
+        }
+
+        async function fetchTimeSeries(symbol, interval) {
+            const url = `${API_BASE}/time_series?symbol=${symbol}&interval=${interval}&outputsize=500&apikey=${API_KEY}`;
+            const res = await fetch(url);
+            const data = await res.json();
+            if (data.status === 'ok' && data.values) {
+                return data.values.reverse().map(v => ({
+                    time: parseDatetime(v.datetime),
+                    open: parseFloat(v.open),
+                    high: parseFloat(v.high),
+                    low: parseFloat(v.low),
+                    close: parseFloat(v.close),
+                }));
+            }
+            if (data.code === 429) throw new Error('Rate limit (429)');
+            return [];
+        }
+
+        // --- Analyze a single pair ---
+        function analyzePair(h1Candles, m30Candles) {
+            const result = {
+                trend: 'range', phase: '—',
+                lastImpSize: null, lastCorrSize: null,
+                reversal: false,
+                s1: false, s2: false, s3: false,
+                entry: null, rr: null,
+            };
+
+            if (h1Candles.length < 20) return result;
+
+            const swings = findSwingPoints(h1Candles, 5);
+            if (swings.length < 4) return result;
+
+            result.trend = determineTrend(swings);
+            const impulses = segmentSwings(swings, result.trend);
+
+            if (impulses.length > 0) {
+                const lastSeg = impulses[impulses.length - 1];
+                result.phase = lastSeg.type === 'impulse' ? 'Импульс' : 'Коррекция';
+
+                const imps = impulses.filter(s => s.type === 'impulse');
+                const corrs = impulses.filter(s => s.type === 'correction');
+                if (imps.length > 0) result.lastImpSize = imps[imps.length - 1].size;
+                if (corrs.length > 0) result.lastCorrSize = corrs[corrs.length - 1].size;
+
+                const rev = checkReversal(impulses);
+                result.reversal = rev.reversal;
+            }
+
+            if (result.trend !== 'range') {
+                const levels = constructLevels(impulses, result.trend, swings);
+
+                if (m30Candles.length > 20) {
+                    const slom = detectSlom(m30Candles, result.trend, levels);
+                    if (slom) {
+                        result.s1 = !!slom.signal1;
+                        result.s2 = !!slom.signal2;
+                        result.s3 = !!slom.signal3;
+
+                        if (slom.signal2) {
+                            const entry = computeEntry(slom, levels, result.trend);
+                            if (entry) {
+                                result.entry = entry;
+                                result.rr = entry.rr;
+                            }
+                        }
+                    }
+                }
+            }
+
+            return result;
+        }
+
+        // --- Render table row ---
+        function renderRow(pair, result, isScanning) {
+            const trendIcon = result.trend === 'up' ? '↑' : result.trend === 'down' ? '↓' : '↔';
+            const trendClass = result.trend === 'up' ? 'up' : result.trend === 'down' ? 'down' : 'neutral';
+
+            const impCorr = (result.lastImpSize != null && result.lastCorrSize != null)
+                ? `${result.lastImpSize.toFixed(4)} / ${result.lastCorrSize.toFixed(4)}`
+                : '—';
+
+            const reversalHtml = result.reversal
+                ? '<span class="down" title="Коррекция > Импульса">⚠</span>'
+                : '<span class="neutral">—</span>';
+
+            const s1 = result.s1 ? '<span class="signal-ok">✓</span>' : '<span class="neutral">—</span>';
+            const s2 = result.s2 ? '<span class="signal-ok">✓</span>' : '<span class="neutral">—</span>';
+            const s3 = result.s3 ? '<span class="signal-ok">✓</span>' : '<span class="neutral">—</span>';
+
+            let entryHtml = '<span class="neutral">—</span>';
+            let rrHtml = '<span class="neutral">—</span>';
+            if (result.entry) {
+                if (result.entry.valid) {
+                    const dir = result.entry.direction === 'up' ? 'LONG ↑' : 'SHORT ↓';
+                    const cls = result.entry.direction === 'up' ? 'entry-long' : 'entry-short';
+                    entryHtml = `<span class="${cls}">${dir}</span>`;
+                } else {
+                    entryHtml = `<span class="neutral" title="${result.entry.reason}">—</span>`;
+                }
+                const rrVal = result.rr != null ? result.rr.toFixed(2) : '—';
+                const rrCls = result.rr >= 3 ? 'rr-good' : (result.rr >= 2 ? 'val' : 'neutral');
+                rrHtml = `<span class="${rrCls}">${rrVal}</span>`;
+            }
+
+            const time = new Date().toLocaleTimeString();
+            const scanningLabel = isScanning
+                ? `<span class="scanning-pair"><span class="spinner-inline"></span>${pair}</span>`
+                : pair;
+
+            return `<tr class="clickable${result.entry && result.entry.valid ? (result.entry.direction === 'up' ? ' signal-long' : ' signal-short') : ''}" data-pair="${pair}" onclick="openChart('${pair}')">
+                <td class="val">${scanningLabel}</td>
+                <td><span class="${trendClass}">${trendIcon}</span></td>
+                <td>${result.phase}</td>
+                <td>${impCorr}</td>
+                <td>${reversalHtml}</td>
+                <td>${s1}</td>
+                <td>${s2}</td>
+                <td>${s3}</td>
+                <td>${entryHtml}</td>
+                <td>${rrHtml}</td>
+                <td>${time}</td>
+            </tr>`;
+        }
+
+        // --- Notifications ---
+        function requestNotificationPermission() {
+            if ('Notification' in window && Notification.permission === 'default') {
+                Notification.requestPermission();
+            }
+        }
+
+        function sendNotification(pair, direction, rr) {
+            const key = `${pair}:${direction}`;
+            if (notifiedEntries.has(key)) return;
+            notifiedEntries.add(key);
+
+            const dir = direction === 'up' ? 'LONG ↑' : 'SHORT ↓';
+            const title = `${pair} — ${dir}`;
+            const body = `Сигнал входа! R:R = ${rr.toFixed(2)}`;
+
+            // Browser notification
+            if ('Notification' in window && Notification.permission === 'granted') {
+                new Notification(title, { body, icon: '📊' });
+            }
+
+            // Audio beep
+            playBeep();
+        }
+
+        function playBeep() {
+            try {
+                const ctx = new (window.AudioContext || window.webkitAudioContext)();
+                const osc = ctx.createOscillator();
+                const gain = ctx.createGain();
+                osc.connect(gain);
+                gain.connect(ctx.destination);
+                osc.frequency.value = 880;
+                osc.type = 'sine';
+                gain.gain.value = 0.3;
+                osc.start();
+                osc.stop(ctx.currentTime + 0.15);
+                setTimeout(() => {
+                    const osc2 = ctx.createOscillator();
+                    const gain2 = ctx.createGain();
+                    osc2.connect(gain2);
+                    gain2.connect(ctx.destination);
+                    osc2.frequency.value = 1100;
+                    osc2.type = 'sine';
+                    gain2.gain.value = 0.3;
+                    osc2.start();
+                    osc2.stop(ctx.currentTime + 0.2);
+                }, 180);
+            } catch {}
+        }
+
+        // --- Scanner cycle ---
+        const pairResults = {};
+
+        function initTableRows() {
+            const pairs = getWatchlist();
+            scannerBody.innerHTML = pairs.map(pair => {
+                const result = pairResults[pair] || {
+                    trend: 'range', phase: '—',
+                    lastImpSize: null, lastCorrSize: null,
+                    reversal: false, s1: false, s2: false, s3: false,
+                    entry: null, rr: null,
+                };
+                return renderRow(pair, result, false);
+            }).join('');
+        }
+
+        function updateRowForPair(pair, result, isScanning) {
+            const rows = scannerBody.querySelectorAll('tr');
+            const pairs = getWatchlist();
+            const idx = pairs.indexOf(pair);
+            if (idx >= 0 && rows[idx]) {
+                rows[idx].outerHTML = renderRow(pair, result, isScanning);
+            }
+        }
+
+        async function runScannerCycle() {
+            if (!scanning) return;
+
+            const pairs = getWatchlist();
+            const cycleStart = Date.now();
+            notifiedEntries.clear();
+
+            for (let i = 0; i < pairs.length; i++) {
+                if (scanAbort) return;
+
+                const pair = pairs[i];
+                statusText.textContent = `Сканирование ${pair} (${i + 1}/${pairs.length})...`;
+
+                // Show scanning indicator
+                updateRowForPair(pair, pairResults[pair] || {
+                    trend: 'range', phase: '—',
+                    lastImpSize: null, lastCorrSize: null,
+                    reversal: false, s1: false, s2: false, s3: false,
+                    entry: null, rr: null,
+                }, true);
+
+                try {
+                    // Fetch H1
+                    const h1 = await fetchTimeSeries(pair, '1h');
+                    if (scanAbort) return;
+
+                    // Wait before next API call
+                    await delay(8000);
+                    if (scanAbort) return;
+
+                    // Fetch M30
+                    const m30 = await fetchTimeSeries(pair, '30min');
+                    if (scanAbort) return;
+
+                    // Analyze
+                    const result = analyzePair(h1, m30);
+                    pairResults[pair] = result;
+
+                    // Update row
+                    updateRowForPair(pair, result, false);
+
+                    // Notify if valid entry
+                    if (result.entry && result.entry.valid) {
+                        sendNotification(pair, result.entry.direction, result.rr);
+                    }
+
+                } catch (err) {
+                    console.warn(`Scan error for ${pair}:`, err);
+                    statusText.textContent = `Ошибка ${pair}: ${err.message}`;
+                    updateRowForPair(pair, pairResults[pair] || {
+                        trend: 'range', phase: '—',
+                        lastImpSize: null, lastCorrSize: null,
+                        reversal: false, s1: false, s2: false, s3: false,
+                        entry: null, rr: null,
+                    }, false);
+                }
+
+                // Wait between pairs (except after last)
+                if (i < pairs.length - 1 && !scanAbort) {
+                    await delay(8000);
+                }
+            }
+
+            if (scanAbort) return;
+
+            const elapsed = ((Date.now() - cycleStart) / 1000).toFixed(0);
+            statusText.textContent = `Цикл завершён за ${elapsed}с. Следующий через 30с...`;
+            cycleInfo.textContent = `Последний цикл: ${new Date().toLocaleTimeString()}`;
+
+            // Wait 30s then repeat
+            cycleTimer = setTimeout(() => runScannerCycle(), 30000);
+        }
+
+        // --- Toggle scanner (exposed globally) ---
+        window.toggleScanner = function() {
+            if (scanning) {
+                // Stop
+                scanning = false;
+                scanAbort = true;
+                if (cycleTimer) { clearTimeout(cycleTimer); cycleTimer = null; }
+                scanBtn.textContent = 'Старт';
+                scanBtn.classList.remove('stop');
+                statusDot.classList.remove('active');
+                statusText.textContent = 'Остановлен';
+            } else {
+                // Start
+                scanning = true;
+                scanAbort = false;
+                scanBtn.textContent = 'Стоп';
+                scanBtn.classList.add('stop');
+                statusDot.classList.add('active');
+                requestNotificationPermission();
+                initTableRows();
+                runScannerCycle();
+            }
+        };
+
+        // --- Open chart with pair ---
+        window.openChart = function(pair) {
+            window.open(`index.html?pair=${encodeURIComponent(pair)}`, '_blank');
+        };
+
+        // --- Init ---
+        populateSelectors();
+        initTableRows();
+    })();
+    </script>
+</body>
+</html>
