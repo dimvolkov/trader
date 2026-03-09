@@ -76,6 +76,18 @@
             outline: none;
         }
         select:hover { border-color: #2962ff; }
+        input[type="text"] {
+            background: #2a2e39;
+            color: #fff;
+            border: 1px solid #363a45;
+            padding: 6px 10px;
+            border-radius: 4px;
+            font-size: 13px;
+            outline: none;
+            width: 220px;
+            font-family: monospace;
+        }
+        input[type="text"]:focus { border-color: #2962ff; }
         .watchlist-config {
             padding: 12px 20px;
             background: #1a1e2a;
@@ -216,11 +228,13 @@
     </div>
     <div class="watchlist-config">
         <label>Источник:</label>
-        <select id="dataSource" onchange="saveSettings()">
+        <select id="dataSource" onchange="onSourceChange()">
             <option value="twelvedata">Twelve Data</option>
             <option value="tradermade">TraderMade</option>
             <option value="polygon">Polygon.io</option>
         </select>
+        <label>API ключ:</label>
+        <input type="text" id="apiKeyInput" placeholder="Введите API ключ" spellcheck="false" onchange="saveSettings()">
         <label>Watchlist:</label>
         <select id="pair1"></select>
         <select id="pair2"></select>
@@ -259,22 +273,23 @@
         const DATA_SOURCES = {
             twelvedata: {
                 label: 'Twelve Data',
-                apiKey: '8694f4e28a974a0eba808458ceb33bfb',
-                rateDelay: 12000, // ms between requests
+                defaultKey: '8694f4e28a974a0eba808458ceb33bfb',
+                rateDelay: 12000,
             },
             tradermade: {
                 label: 'TraderMade',
-                apiKey: '', // вставьте свой ключ
+                defaultKey: '',
                 rateDelay: 3000,
             },
             polygon: {
                 label: 'Polygon.io',
-                apiKey: '', // вставьте свой ключ
+                defaultKey: '',
                 rateDelay: 12000,
             },
         };
 
         const SOURCE_STORAGE_KEY = 'scannerDataSource';
+        const APIKEYS_STORAGE_KEY = 'scannerApiKeys';
 
         const PAIRS = {
             'RUB пары': [
@@ -319,6 +334,7 @@
         const cycleInfo = document.getElementById('cycleInfo');
         const scannerBody = document.getElementById('scannerBody');
         const dataSourceSelect = document.getElementById('dataSource');
+        const apiKeyInput = document.getElementById('apiKeyInput');
         const pairSelects = [
             document.getElementById('pair1'),
             document.getElementById('pair2'),
@@ -375,9 +391,32 @@
             return 'twelvedata';
         }
 
+        function loadApiKeys() {
+            try {
+                const saved = JSON.parse(localStorage.getItem(APIKEYS_STORAGE_KEY));
+                if (saved && typeof saved === 'object') return saved;
+            } catch {}
+            return {};
+        }
+
+        function getApiKey(source) {
+            const saved = loadApiKeys();
+            return saved[source] || DATA_SOURCES[source].defaultKey || '';
+        }
+
         window.saveSettings = function() {
-            localStorage.setItem(SOURCE_STORAGE_KEY, getDataSource());
+            const source = getDataSource();
+            localStorage.setItem(SOURCE_STORAGE_KEY, source);
+            const keys = loadApiKeys();
+            keys[source] = apiKeyInput.value.trim();
+            localStorage.setItem(APIKEYS_STORAGE_KEY, JSON.stringify(keys));
             saveWatchlist();
+        };
+
+        window.onSourceChange = function() {
+            const source = getDataSource();
+            localStorage.setItem(SOURCE_STORAGE_KEY, source);
+            apiKeyInput.value = getApiKey(source);
         };
 
         // --- Analysis functions (copied from index.html) ---
@@ -577,8 +616,7 @@
 
         // --- Twelve Data ---
         async function fetchTwelveData(symbol, interval) {
-            const cfg = DATA_SOURCES.twelvedata;
-            const url = `https://api.twelvedata.com/time_series?symbol=${symbol}&interval=${interval}&outputsize=500&apikey=${cfg.apiKey}`;
+            const url = `https://api.twelvedata.com/time_series?symbol=${symbol}&interval=${interval}&outputsize=500&apikey=${getApiKey('twelvedata')}`;
             const res = await fetch(url);
             const data = await res.json();
             if (data.status === 'ok' && data.values) {
@@ -596,7 +634,6 @@
 
         // --- TraderMade ---
         async function fetchTraderMade(symbol, interval) {
-            const cfg = DATA_SOURCES.tradermade;
             const pair = pairConcat(symbol);
             // interval: "1h" → hourly, "30min" → minute period=30
             let tmInterval, tmPeriod = '';
@@ -614,7 +651,7 @@
             const from = new Date(now.getTime() - daysBack * 86400000);
             const startDate = from.toISOString().slice(0, 10);
             const endDate = now.toISOString().slice(0, 10);
-            const url = `https://marketdata.tradermade.com/api/v1/timeseries?currency=${pair}&api_key=${cfg.apiKey}&start_date=${startDate}&end_date=${endDate}&interval=${tmInterval}${tmPeriod}&format=records`;
+            const url = `https://marketdata.tradermade.com/api/v1/timeseries?currency=${pair}&api_key=${getApiKey('tradermade')}&start_date=${startDate}&end_date=${endDate}&interval=${tmInterval}${tmPeriod}&format=records`;
             const res = await fetch(url);
             const data = await res.json();
             if (data.quotes && Array.isArray(data.quotes)) {
@@ -636,7 +673,6 @@
 
         // --- Polygon.io ---
         async function fetchPolygon(symbol, interval) {
-            const cfg = DATA_SOURCES.polygon;
             const ticker = 'C:' + pairConcat(symbol);
             // interval: "1h" → 1/hour, "30min" → 30/minute
             let multiplier, timespan;
@@ -651,7 +687,7 @@
             const from = new Date(now.getTime() - 60 * 86400000); // 60 days back
             const fromDate = from.toISOString().slice(0, 10);
             const toDate = now.toISOString().slice(0, 10);
-            const url = `https://api.polygon.io/v2/aggs/ticker/${ticker}/range/${multiplier}/${timespan}/${fromDate}/${toDate}?adjusted=true&sort=asc&limit=5000&apiKey=${cfg.apiKey}`;
+            const url = `https://api.polygon.io/v2/aggs/ticker/${ticker}/range/${multiplier}/${timespan}/${fromDate}/${toDate}?adjusted=true&sort=asc&limit=5000&apiKey=${getApiKey('polygon')}`;
             const res = await fetch(url);
             const data = await res.json();
             if (data.status === 'OK' && data.results) {
@@ -967,7 +1003,7 @@
             notifiedEntries.clear();
 
             // Check API key
-            if (!DATA_SOURCES[source].apiKey) {
+            if (!getApiKey(source)) {
                 statusText.textContent = `Ошибка: не указан API ключ для ${DATA_SOURCES[source].label}`;
                 scanning = false;
                 scanBtn.disabled = false;
@@ -1067,6 +1103,7 @@
 
         // --- Init ---
         dataSourceSelect.value = loadDataSource();
+        apiKeyInput.value = getApiKey(loadDataSource());
         populateSelectors();
         initTableRows();
     })();
