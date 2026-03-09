@@ -236,6 +236,10 @@
             twelvedata: { label: 'Twelve Data', defaultKey: '8694f4e28a974a0eba808458ceb33bfb' },
             tradermade: { label: 'TraderMade', defaultKey: '' },
             polygon:    { label: 'Polygon.io', defaultKey: '' },
+            finnhub:    { label: 'Finnhub', defaultKey: '' },
+            fcsapi:     { label: 'FCS API', defaultKey: '' },
+            alphavantage: { label: 'Alpha Vantage', defaultKey: '' },
+            oanda:      { label: 'OANDA', defaultKey: '' },
         };
         const CHART_SOURCE_KEY = 'chartDataSource';
         const CHART_APIKEYS_KEY = 'chartApiKeys';
@@ -640,6 +644,30 @@
             }
         }
 
+        // --- OANDA ---
+        async function fetchOandaTS(symbol, interval) {
+            const parts = symbol.split('/');
+            const instrument = parts[0] + '_' + parts[1];
+            const granMap = { '1min': 'M1', '5min': 'M5', '15min': 'M15', '30min': 'M30',
+                '1h': 'H1', '4h': 'H4', '1day': 'D', '1week': 'W', '1month': 'M' };
+            const granularity = granMap[interval] || 'H1';
+            const url = `https://api-fxpractice.oanda.com/v3/instruments/${instrument}/candles?granularity=${granularity}&count=500&price=M`;
+            const res = await fetch(url, {
+                headers: { 'Authorization': 'Bearer ' + getChartApiKey('oanda') }
+            });
+            if (!res.ok) {
+                const err = await res.json().catch(() => ({}));
+                throw new Error(err.errorMessage || `OANDA error ${res.status}`);
+            }
+            const data = await res.json();
+            if (!data.candles || data.candles.length === 0) throw new Error('Нет данных от OANDA');
+            return data.candles.filter(c => c.complete !== false).map(c => ({
+                time: Math.floor(new Date(c.time).getTime() / 1000),
+                open: parseFloat(c.mid.o), high: parseFloat(c.mid.h),
+                low: parseFloat(c.mid.l), close: parseFloat(c.mid.c),
+            }));
+        }
+
         async function fetchCandles(symbol, interval, outputsize) {
             const src = currentSource();
             if (src === 'tradermade') return fetchTraderMadeTS(symbol, interval);
@@ -647,6 +675,7 @@
             if (src === 'finnhub') return fetchFinnhubTS(symbol, interval);
             if (src === 'fcsapi') return fetchFcsApiTS(symbol, interval);
             if (src === 'alphavantage') return fetchAlphaVantageTS(symbol, interval);
+            if (src === 'oanda') return fetchOandaTS(symbol, interval);
             return fetchTwelveDataTS(symbol, interval, outputsize);
         }
 

@@ -281,6 +281,7 @@
             finnhub:    { label: 'Finnhub', defaultKey: '', rateDelay: 1500 },
             fcsapi:     { label: 'FCS API', defaultKey: '', rateDelay: 21000 },
             alphavantage: { label: 'Alpha Vantage', defaultKey: '', rateDelay: 15000 },
+            oanda:      { label: 'OANDA', defaultKey: '', rateDelay: 500 },
         };
 
         const SOURCE_STORAGE_KEY = 'scannerDataSource';
@@ -793,6 +794,28 @@
             return [];
         }
 
+        // --- OANDA ---
+        async function fetchOanda(symbol, interval) {
+            const parts = symbol.split('/');
+            const instrument = parts[0] + '_' + parts[1];
+            const granularity = interval === '1h' ? 'H1' : interval === '30min' ? 'M30' : 'H1';
+            const url = `https://api-fxpractice.oanda.com/v3/instruments/${instrument}/candles?granularity=${granularity}&count=500&price=M`;
+            const res = await fetch(url, {
+                headers: { 'Authorization': 'Bearer ' + getApiKey('oanda') }
+            });
+            if (!res.ok) {
+                const err = await res.json().catch(() => ({}));
+                throw new Error(err.errorMessage || `OANDA error ${res.status}`);
+            }
+            const data = await res.json();
+            if (!data.candles || data.candles.length === 0) throw new Error('Нет данных от OANDA');
+            return data.candles.filter(c => c.complete !== false).map(c => ({
+                time: Math.floor(new Date(c.time).getTime() / 1000),
+                open: parseFloat(c.mid.o), high: parseFloat(c.mid.h),
+                low: parseFloat(c.mid.l), close: parseFloat(c.mid.c),
+            }));
+        }
+
         // --- Universal fetch with retry ---
         async function fetchTimeSeries(symbol, interval, retries = 3) {
             const source = getDataSource();
@@ -800,6 +823,7 @@
                 twelvedata: fetchTwelveData, tradermade: fetchTraderMade,
                 polygon: fetchPolygon, finnhub: fetchFinnhub,
                 fcsapi: fetchFcsApi, alphavantage: fetchAlphaVantage,
+                oanda: fetchOanda,
             };
             const fetchFn = fetchFns[source] || fetchTwelveData;
             for (let attempt = 0; attempt <= retries; attempt++) {

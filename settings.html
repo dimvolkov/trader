@@ -319,6 +319,23 @@
                 validateResponse: (data) => data['Time Series FX (Intraday)'] && Object.keys(data['Time Series FX (Intraday)']).length > 0,
                 errorMessage: (data) => data['Error Message'] || data['Note'] || 'Ошибка API',
             },
+            {
+                id: 'oanda',
+                name: 'OANDA',
+                url: 'https://www.oanda.com',
+                signupUrl: 'https://www.oanda.com/apply/demo',
+                limits: 'Без лимитов (демо-аккаунт), до 5000 свечей/запрос',
+                defaultKey: '',
+                testEndpoint: null,
+                testFetch: async (key) => {
+                    const res = await fetch('https://api-fxpractice.oanda.com/v3/instruments/EUR_USD/candles?granularity=H1&count=2&price=M', {
+                        headers: { 'Authorization': 'Bearer ' + key }
+                    });
+                    return res.json();
+                },
+                validateResponse: (data) => data.candles && data.candles.length > 0,
+                errorMessage: (data) => data.errorMessage || 'Неверный токен или ошибка API',
+            },
         ];
 
         const APIKEYS_STORAGE = 'chartApiKeys';
@@ -436,9 +453,10 @@
             resultEl.innerHTML = '<span class="test-loading">Проверка...</span>';
             btn.disabled = true;
 
-            fetch(src.testEndpoint(key))
-                .then(r => r.json())
-                .then(data => {
+            const fetchPromise = src.testFetch
+                ? src.testFetch(key)
+                : fetch(src.testEndpoint(key)).then(r => r.json());
+            fetchPromise.then(data => {
                     if (src.validateResponse(data)) {
                         resultEl.innerHTML = '<span class="test-ok">Ключ работает</span>';
                     } else {
