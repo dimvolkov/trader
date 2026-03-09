@@ -469,6 +469,12 @@
             candleSeries.setMarkers(all);
         }
 
+        function showOverlayError(msg) {
+            overlay.classList.remove('hidden');
+            overlay.style.zIndex = '100';
+            overlay.innerHTML = `<div class="overlay-content"><div style="color:#ef5350;font-size:16px;line-height:1.6">${msg}</div></div>`;
+        }
+
         // --- Load historical candles via Twelve Data ---
         async function loadHistory() {
             try {
@@ -509,14 +515,14 @@
                 } else {
                     console.warn('API response:', data);
                     if (data.code === 429) {
-                        overlay.innerHTML = '<div class="overlay-content" style="color:#ef5350">API лимит исчерпан.<br>Попробуйте позже или смените ключ.</div>';
+                        showOverlayError('API лимит исчерпан (429).<br>Дневной лимит Twelve Data обнулится завтра.');
                     } else {
-                        overlay.innerHTML = '<div class="overlay-content" style="color:#ef5350">Ошибка загрузки данных</div>';
+                        showOverlayError('Ошибка загрузки данных');
                     }
                 }
             } catch (e) {
                 console.warn('History load failed:', e);
-                overlay.innerHTML = '<div class="overlay-content" style="color:#ef5350">Ошибка соединения с API</div>';
+                showOverlayError('Ошибка соединения с API');
             }
             return false;
         }
