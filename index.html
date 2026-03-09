@@ -21,6 +21,8 @@
             padding: 12px 20px;
             background: #1e222d;
             border-bottom: 1px solid #2a2e39;
+            flex-wrap: wrap;
+            gap: 8px;
         }
         .pair-info {
             display: flex;
@@ -66,6 +68,11 @@
             border-color: #2962ff;
             color: #fff;
         }
+        .advisor-btn.active {
+            background: #ff9800 !important;
+            border-color: #ff9800 !important;
+            color: #fff !important;
+        }
         .pair-select {
             background: #2a2e39;
             color: #fff;
@@ -79,10 +86,61 @@
         }
         .pair-select:hover { border-color: #2962ff; }
         .pair-select:focus { border-color: #2962ff; }
+        .chart-wrapper {
+            flex: 1;
+            display: flex;
+            min-height: 0;
+        }
         .chart-container {
             flex: 1;
             position: relative;
+            min-width: 0;
         }
+        .advisor-panel {
+            width: 320px;
+            background: #1e222d;
+            border-left: 1px solid #2a2e39;
+            overflow-y: auto;
+            padding: 16px;
+            font-size: 13px;
+            line-height: 1.6;
+            display: none;
+            flex-shrink: 0;
+        }
+        .advisor-panel.visible {
+            display: block;
+        }
+        .advisor-panel h3 {
+            color: #fff;
+            font-size: 14px;
+            margin: 14px 0 6px;
+            padding-bottom: 4px;
+            border-bottom: 1px solid #2a2e39;
+        }
+        .advisor-panel h3:first-child {
+            margin-top: 0;
+        }
+        .advisor-panel .val { color: #fff; font-weight: 600; }
+        .advisor-panel .up { color: #26a69a; }
+        .advisor-panel .down { color: #ef5350; }
+        .advisor-panel .neutral { color: #787b86; }
+        .advisor-panel .signal-ok { color: #00e676; }
+        .advisor-panel .signal-wait { color: #ff9800; }
+        .advisor-panel .log-entry {
+            padding: 4px 0;
+            border-bottom: 1px solid #1a1e2a;
+            font-size: 12px;
+            color: #787b86;
+        }
+        .advisor-panel .entry-box {
+            background: #131722;
+            border: 1px solid #363a45;
+            border-radius: 6px;
+            padding: 10px;
+            margin-top: 8px;
+        }
+        .advisor-panel .entry-box .label { color: #787b86; font-size: 11px; }
+        .advisor-panel .entry-box .value { color: #fff; font-size: 15px; font-weight: 700; }
         .status-bar {
             display: flex;
             align-items: center;
@@ -144,14 +202,21 @@
         <div class="controls">
             <button data-type="line">Line</button>
             <button data-type="candle" class="active">Candle</button>
+            <button class="advisor-btn" id="advisorBtn">Советник</button>
         </div>
     </div>
-    <div class="chart-container" id="chartContainer">
-        <div class="overlay" id="overlay">
-            <div class="overlay-content">
-                <div class="spinner"></div>
-                <div>Connecting...</div>
+    <div class="chart-wrapper">
+        <div class="chart-container" id="chartContainer">
+            <div class="overlay" id="overlay">
+                <div class="overlay-content">
+                    <div class="spinner"></div>
+                    <div>Connecting...</div>
+                </div>
             </div>
+        </div>
+        <div class="advisor-panel" id="advisorPanel">
+            <h3>Советник</h3>
+            <div id="advisorContent"><span class="neutral">Загрузка данных...</span></div>
         </div>
     </div>
     <div class="status-bar">
@@ -246,6 +311,26 @@
             'Y':  { interval: '1month', outputsize: 240,  seconds: 2592000 },
         };
 
+        // --- Advisor State ---
+        let advisorActive = false;
+        let advisorTimer = null;
+        let advisorState = {
+            h1Candles: [], m30Candles: [],
+            swings: [],
+            trend: null,
+            trendSwings: [],
+            impulses: [],
+            levels: {},
+            slom: null,
+            entry: null,
+            status: '',
+            log: []
+        };
+        let advisorImpulseSeries = null;
+        let advisorCorrectionSeries = null;
+        let advisorPriceLines = [];
+        let advisorMarkers = [];
+
         // --- UI refs ---
         const priceEl = document.getElementById('currentPrice');
         const changeEl = document.getElementById('priceChange');
@@ -254,6 +339,9 @@
         const lastUpdateEl = document.getElementById('lastUpdate');
         const overlay = document.getElementById('overlay');
         const pairSelect = document.getElementById('pairSelect');
+        const advisorBtn = document.getElementById('advisorBtn');
+        const advisorPanel = document.getElementById('advisorPanel');
+        const advisorContent = document.getElementById('advisorContent');
 
         // --- Populate pair selector ---
         for (const [group, pairs] of Object.entries(PAIRS)) {
@@ -280,9 +368,9 @@
         });
 
         // --- Chart type toggle ---
-        document.querySelectorAll('.controls:not(.timeframes) button').forEach(btn => {
+        document.querySelectorAll('.controls:not(.timeframes) button:not(.advisor-btn)').forEach(btn => {
             btn.addEventListener('click', () => {
-                document.querySelector('.controls:not(.timeframes) .active').classList.remove('active');
+                document.querySelectorAll('.controls:not(.timeframes) button:not(.advisor-btn)').forEach(b => b.classList.remove('active'));
                 btn.classList.add('active');
                 chartType = btn.dataset.type;
                 candleSeries.applyOptions({ visible: chartType === 'candle' });
@@ -299,6 +387,23 @@
                 currentCandle = null;
                 loadHistory();
             });
+        });
+
+        // --- Advisor button toggle ---
+        advisorBtn.addEventListener('click', () => {
+            advisorActive = !advisorActive;
+            advisorBtn.classList.toggle('active', advisorActive);
+            if (advisorActive) {
+                advisorPanel.classList.add('visible');
+                chart.applyOptions({ width: container.clientWidth, height: container.clientHeight });
+                runAdvisor();
+                advisorTimer = setInterval(() => runAdvisor(), 60000);
+            } else {
+                advisorPanel.classList.remove('visible');
+                chart.applyOptions({ width: container.clientWidth, height: container.clientHeight });
+                clearAdvisorMarkup();
+                if (advisorTimer) { clearInterval(advisorTimer); advisorTimer = null; }
+            }
         });
 
         function updatePrice(price) {
@@ -333,7 +438,6 @@
         function handleTick(price, timestamp) {
             let time = getCandleTime(timestamp);
 
-            // Ensure new time is not before the last candle (timezone mismatch fix)
             if (currentCandle && time < currentCandle.time) {
                 time = currentCandle.time;
             }
@@ -354,6 +458,15 @@
         function setStatus(text, connected) {
             statusDot.className = 'status-dot' + (connected ? ' connected' : '');
             statusText.textContent = text;
+        }
+
+        // --- Unified markers system ---
+        let separatorMarkers = [];
+
+        function flushMarkers() {
+            const all = [...separatorMarkers, ...advisorMarkers];
+            all.sort((a, b) => a.time - b.time);
+            candleSeries.setMarkers(all);
         }
 
         // --- Load historical candles via Twelve Data ---
@@ -388,7 +501,8 @@
                         currentCandle = last;
                         updatePrice(last.close);
                         drawSupportResistance(candles);
-                        drawPeriodSeparators(candles);
+                        buildPeriodSeparators(candles);
+                        flushMarkers();
                     }
                     overlay.classList.add('hidden');
                     return true;
@@ -426,8 +540,6 @@
         function stopPolling() {
             if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
         }
-
-        // WebSocket not available on free Twelve Data plan — using polling only
 
         // --- Support & Resistance levels ---
         function clearPriceLines() {
@@ -472,20 +584,16 @@
             return [...supports, ...resistances];
         }
 
-        function drawPeriodSeparators(candles) {
+        function buildPeriodSeparators(candles) {
+            separatorMarkers = [];
             if (candles.length < 2) return;
-            // Only for intraday timeframes
-            if (['W', 'M', 'Y'].includes(currentTF)) {
-                candleSeries.setMarkers([]);
-                return;
-            }
-            const markers = [];
+            if (['W', 'M', 'Y'].includes(currentTF)) return;
             let prevDay = null;
             for (const c of candles) {
                 const d = new Date(c.time * 1000);
                 const day = d.getUTCFullYear() * 10000 + (d.getUTCMonth() + 1) * 100 + d.getUTCDate();
                 if (prevDay !== null && day !== prevDay) {
-                    markers.push({
+                    separatorMarkers.push({
                         time: c.time,
                         position: 'aboveBar',
                         color: '#363a45',
@@ -496,7 +604,6 @@
                 }
                 prevDay = day;
             }
-            candleSeries.setMarkers(markers);
         }
 
         function drawSupportResistance(candles) {
@@ -515,11 +622,692 @@
             });
         }
 
+        // ============================================================
+        // ADVISOR — Trading Advisor Logic
+        // ============================================================
+
+        async function fetchAdvisorData(symbol) {
+            const fetchTF = async (interval) => {
+                const url = `${API_BASE}/time_series?symbol=${symbol}&interval=${interval}&outputsize=500&apikey=${API_KEY}`;
+                const res = await fetch(url);
+                const data = await res.json();
+                if (data.status === 'ok' && data.values) {
+                    return data.values.reverse().map(v => ({
+                        time: parseDatetime(v.datetime),
+                        open: parseFloat(v.open),
+                        high: parseFloat(v.high),
+                        low: parseFloat(v.low),
+                        close: parseFloat(v.close),
+                    }));
+                }
+                return [];
+            };
+
+            const [h1, m30] = await Promise.all([
+                fetchTF('1h'),
+                fetchTF('30min'),
+            ]);
+            return { h1, m30 };
+        }
+
+        function findSwingPoints(candles, lookback) {
+            const swings = [];
+            for (let i = lookback; i < candles.length - lookback; i++) {
+                let isHigh = true;
+                let isLow = true;
+                for (let j = 1; j <= lookback; j++) {
+                    if (candles[i].high < candles[i - j].high || candles[i].high < candles[i + j].high) {
+                        isHigh = false;
+                    }
+                    if (candles[i].low > candles[i - j].low || candles[i].low > candles[i + j].low) {
+                        isLow = false;
+                    }
+                }
+                if (isHigh) swings.push({ index: i, time: candles[i].time, price: candles[i].high, type: 'high' });
+                if (isLow) swings.push({ index: i, time: candles[i].time, price: candles[i].low, type: 'low' });
+            }
+            swings.sort((a, b) => a.time - b.time);
+            return swings;
+        }
+
+        function determineTrend(swings) {
+            const highs = swings.filter(s => s.type === 'high');
+            const lows = swings.filter(s => s.type === 'low');
+            if (highs.length < 3 || lows.length < 3) return 'range';
+
+            const lastHighs = highs.slice(-3);
+            const lastLows = lows.slice(-3);
+
+            const hhCount = (lastHighs[1].price > lastHighs[0].price ? 1 : 0) +
+                            (lastHighs[2].price > lastHighs[1].price ? 1 : 0);
+            const hlCount = (lastLows[1].price > lastLows[0].price ? 1 : 0) +
+                            (lastLows[2].price > lastLows[1].price ? 1 : 0);
+            const lhCount = (lastHighs[1].price < lastHighs[0].price ? 1 : 0) +
+                            (lastHighs[2].price < lastHighs[1].price ? 1 : 0);
+            const llCount = (lastLows[1].price < lastLows[0].price ? 1 : 0) +
+                            (lastLows[2].price < lastLows[1].price ? 1 : 0);
+
+            if (hhCount >= 2 && hlCount >= 2) return 'up';
+            if (lhCount >= 2 && llCount >= 2) return 'down';
+            return 'range';
+        }
+
+        function segmentSwings(swings, trend) {
+            if (swings.length < 2) return [];
+            // Build alternating sequence: merge adjacent same-type swings
+            const alternating = [swings[0]];
+            for (let i = 1; i < swings.length; i++) {
+                const last = alternating[alternating.length - 1];
+                if (swings[i].type === last.type) {
+                    // Keep the more extreme one
+                    if (swings[i].type === 'high' && swings[i].price > last.price) {
+                        alternating[alternating.length - 1] = swings[i];
+                    } else if (swings[i].type === 'low' && swings[i].price < last.price) {
+                        alternating[alternating.length - 1] = swings[i];
+                    }
+                } else {
+                    alternating.push(swings[i]);
+                }
+            }
+
+            const segments = [];
+            for (let i = 0; i < alternating.length - 1; i++) {
+                const from = alternating[i];
+                const to = alternating[i + 1];
+                let segType;
+                if (trend === 'up') {
+                    segType = (from.type === 'low' && to.type === 'high') ? 'impulse' : 'correction';
+                } else if (trend === 'down') {
+                    segType = (from.type === 'high' && to.type === 'low') ? 'impulse' : 'correction';
+                } else {
+                    segType = (i % 2 === 0) ? 'impulse' : 'correction';
+                }
+                segments.push({
+                    startTime: from.time, startPrice: from.price,
+                    endTime: to.time, endPrice: to.price,
+                    type: segType,
+                    size: Math.abs(to.price - from.price),
+                });
+            }
+            return segments;
+        }
+
+        function checkReversal(impulses) {
+            const corrections = impulses.filter(s => s.type === 'correction');
+            const imps = impulses.filter(s => s.type === 'impulse');
+            if (corrections.length === 0 || imps.length === 0) return { reversal: false, reason: 'Недостаточно данных' };
+
+            const lastCorr = corrections[corrections.length - 1];
+            const lastImp = imps[imps.length - 1];
+
+            if (lastCorr.size > lastImp.size) {
+                return { reversal: true, reason: `Коррекция (${lastCorr.size.toFixed(4)}) > Импульса (${lastImp.size.toFixed(4)})` };
+            }
+            return { reversal: false, reason: `Коррекция (${lastCorr.size.toFixed(4)}) < Импульса (${lastImp.size.toFixed(4)}) — тренд продолжается` };
+        }
+
+        function constructLevels(impulses, trend, swings) {
+            const imps = impulses.filter(s => s.type === 'impulse');
+            if (imps.length === 0) return {};
+
+            const lastImp = imps[imps.length - 1];
+            const impulseEnd = lastImp.endPrice;
+            const impulseStart = lastImp.startPrice;
+
+            // Find target: previous swing extreme in trend direction
+            let target = null;
+            const relevantSwings = trend === 'up'
+                ? swings.filter(s => s.type === 'high' && s.price > impulseEnd)
+                : swings.filter(s => s.type === 'low' && s.price < impulseEnd);
+
+            if (relevantSwings.length > 0) {
+                relevantSwings.sort((a, b) => trend === 'up'
+                    ? a.price - b.price
+                    : b.price - a.price);
+                target = relevantSwings[0].price;
+            } else {
+                // Project target based on impulse size
+                const size = Math.abs(impulseEnd - impulseStart);
+                target = trend === 'up' ? impulseEnd + size : impulseEnd - size;
+            }
+
+            return { impulseEnd, impulseStart, target };
+        }
+
+        function detectSlom(m30Candles, trendDir, h1Levels) {
+            if (!h1Levels.impulseEnd) return null;
+
+            const m30Swings = findSwingPoints(m30Candles, 4);
+            if (m30Swings.length < 4) return null;
+
+            // Check if price is near an H1 level
+            const lastPrice = m30Candles[m30Candles.length - 1].close;
+            const nearLevel = [h1Levels.impulseEnd, h1Levels.impulseStart, h1Levels.target]
+                .filter(l => l != null)
+                .find(level => Math.abs(lastPrice - level) / level < 0.0015);
+
+            // Get recent M30 micro-swings
+            const recentSwings = m30Swings.slice(-10);
+            const microHighs = recentSwings.filter(s => s.type === 'high');
+            const microLows = recentSwings.filter(s => s.type === 'low');
+
+            if (microHighs.length < 2 || microLows.length < 2) return null;
+
+            // Determine M30 micro-trend
+            const lastMicroHighs = microHighs.slice(-2);
+            const lastMicroLows = microLows.slice(-2);
+
+            let signal1 = null, signal2 = null, signal3 = null;
+
+            if (trendDir === 'up') {
+                // Looking for bullish slom: break above M30 micro-high
+                const microBase = lastMicroLows[lastMicroLows.length - 1];
+                const microTop = lastMicroHighs[lastMicroHighs.length - 1];
+
+                // Signal 1: price breaks above last M30 swing high
+                const breakLevel = lastMicroHighs[lastMicroHighs.length - 2].price;
+                if (microTop.price > breakLevel) {
+                    signal1 = { price: breakLevel, time: microTop.time, label: `пробой ${breakLevel.toFixed(4)}` };
+
+                    // Signal 2: pullback to broken level (within 50% retracement)
+                    const pullbackZone = breakLevel + (microTop.price - breakLevel) * 0.5;
+                    for (let i = microTop.index + 1; i < m30Candles.length; i++) {
+                        if (m30Candles[i].low <= pullbackZone && m30Candles[i].low >= breakLevel * 0.999) {
+                            signal2 = { price: m30Candles[i].low, time: m30Candles[i].time, label: `откат к ${m30Candles[i].low.toFixed(4)}` };
+                            break;
+                        }
+                    }
+
+                    // Signal 3: new impulse breaking signal 1 high
+                    if (signal2) {
+                        for (let i = m30Candles.findIndex(c => c.time >= signal2.time) + 1; i < m30Candles.length; i++) {
+                            if (m30Candles[i].high > microTop.price) {
+                                signal3 = { price: m30Candles[i].high, time: m30Candles[i].time, label: `пробой ${microTop.price.toFixed(4)}` };
+                                break;
+                            }
+                        }
+                    }
+                }
+            } else if (trendDir === 'down') {
+                // Looking for bearish slom: break below M30 micro-low
+                const microBase = lastMicroHighs[lastMicroHighs.length - 1];
+                const microBottom = lastMicroLows[lastMicroLows.length - 1];
+
+                const breakLevel = lastMicroLows[lastMicroLows.length - 2].price;
+                if (microBottom.price < breakLevel) {
+                    signal1 = { price: breakLevel, time: microBottom.time, label: `пробой ${breakLevel.toFixed(4)}` };
+
+                    const pullbackZone = breakLevel - (breakLevel - microBottom.price) * 0.5;
+                    for (let i = microBottom.index + 1; i < m30Candles.length; i++) {
+                        if (m30Candles[i].high >= pullbackZone && m30Candles[i].high <= breakLevel * 1.001) {
+                            signal2 = { price: m30Candles[i].high, time: m30Candles[i].time, label: `откат к ${m30Candles[i].high.toFixed(4)}` };
+                            break;
+                        }
+                    }
+
+                    if (signal2) {
+                        for (let i = m30Candles.findIndex(c => c.time >= signal2.time) + 1; i < m30Candles.length; i++) {
+                            if (m30Candles[i].low < microBottom.price) {
+                                signal3 = { price: m30Candles[i].low, time: m30Candles[i].time, label: `пробой ${microBottom.price.toFixed(4)}` };
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+
+            if (!signal1) return null;
+
+            return {
+                signal1,
+                signal2: signal2 || null,
+                signal3: signal3 || null,
+                complete: !!(signal1 && signal2 && signal3),
+                nearLevel,
+            };
+        }
+
+        function computeEntry(slom, levels, trend) {
+            if (!slom || !slom.signal2 || !levels.target) return null;
+
+            const entry = slom.signal2.price;
+            let stop, take;
+
+            if (trend === 'up') {
+                stop = slom.signal1.price - Math.abs(slom.signal2.price - slom.signal1.price) * 0.5;
+                take = levels.target;
+            } else {
+                stop = slom.signal1.price + Math.abs(slom.signal2.price - slom.signal1.price) * 0.5;
+                take = levels.target;
+            }
+
+            const rr = Math.abs(take - entry) / Math.abs(entry - stop);
+
+            if (rr < 2.0) return { entry, stop, take, rr, valid: false, reason: `R:R = ${rr.toFixed(2)} < 2.0` };
+
+            return {
+                entry, stop, take, rr,
+                direction: trend,
+                valid: true,
+                reason: `R:R = ${rr.toFixed(2)}`
+            };
+        }
+
+        // --- Advisor Visualization ---
+
+        function clearAdvisorMarkup() {
+            // Remove advisor line series
+            if (advisorImpulseSeries) { chart.removeSeries(advisorImpulseSeries); advisorImpulseSeries = null; }
+            if (advisorCorrectionSeries) { chart.removeSeries(advisorCorrectionSeries); advisorCorrectionSeries = null; }
+            // Remove advisor price lines
+            advisorPriceLines.forEach(pl => candleSeries.removePriceLine(pl));
+            advisorPriceLines = [];
+            // Clear advisor markers
+            advisorMarkers = [];
+            flushMarkers();
+            // Clear panel
+            advisorContent.innerHTML = '<span class="neutral">Советник выключен</span>';
+        }
+
+        function renderAdvisorMarkup(state) {
+            // Clear previous advisor markup
+            if (advisorImpulseSeries) { chart.removeSeries(advisorImpulseSeries); advisorImpulseSeries = null; }
+            if (advisorCorrectionSeries) { chart.removeSeries(advisorCorrectionSeries); advisorCorrectionSeries = null; }
+            advisorPriceLines.forEach(pl => candleSeries.removePriceLine(pl));
+            advisorPriceLines = [];
+            advisorMarkers = [];
+
+            // --- Swing markers on displayed candles ---
+            // Map H1 swing times to nearest displayed candle times
+            const displayedCandles = candleSeries.data ? null : null; // We'll use the swing times directly
+            for (const sw of state.swings) {
+                advisorMarkers.push({
+                    time: sw.time,
+                    position: sw.type === 'high' ? 'aboveBar' : 'belowBar',
+                    color: '#ffeb3b',
+                    shape: sw.type === 'high' ? 'arrowDown' : 'arrowUp',
+                    size: 1,
+                    text: sw.price.toFixed(2),
+                });
+            }
+
+            // --- Slom markers on M30 ---
+            if (state.slom) {
+                if (state.slom.signal1) {
+                    advisorMarkers.push({
+                        time: state.slom.signal1.time,
+                        position: 'belowBar',
+                        color: '#2962ff',
+                        shape: 'circle',
+                        size: 2,
+                        text: 'S1',
+                    });
+                }
+                if (state.slom.signal2) {
+                    advisorMarkers.push({
+                        time: state.slom.signal2.time,
+                        position: 'belowBar',
+                        color: '#ff9800',
+                        shape: 'circle',
+                        size: 2,
+                        text: 'S2',
+                    });
+                }
+                if (state.slom.signal3) {
+                    advisorMarkers.push({
+                        time: state.slom.signal3.time,
+                        position: 'belowBar',
+                        color: '#00e676',
+                        shape: 'circle',
+                        size: 2,
+                        text: 'S3',
+                    });
+                }
+            }
+
+            // --- Entry marker ---
+            if (state.entry && state.entry.valid) {
+                advisorMarkers.push({
+                    time: state.slom.signal2.time,
+                    position: state.entry.direction === 'up' ? 'belowBar' : 'aboveBar',
+                    color: '#00e676',
+                    shape: state.entry.direction === 'up' ? 'arrowUp' : 'arrowDown',
+                    size: 3,
+                    text: 'ENTRY',
+                });
+            }
+
+            flushMarkers();
+
+            // --- Impulse/correction lines ---
+            const impulseData = [];
+            const correctionData = [];
+
+            for (const seg of state.impulses) {
+                const arr = seg.type === 'impulse' ? impulseData : correctionData;
+                arr.push({ time: seg.startTime, value: seg.startPrice });
+                arr.push({ time: seg.endTime, value: seg.endPrice });
+            }
+
+            if (impulseData.length > 0) {
+                impulseData.sort((a, b) => a.time - b.time);
+                advisorImpulseSeries = chart.addLineSeries({
+                    color: '#2962ff',
+                    lineWidth: 2,
+                    lineStyle: LightweightCharts.LineStyle.Solid,
+                    lastValueVisible: false,
+                    priceLineVisible: false,
+                    crosshairMarkerVisible: false,
+                });
+                // Build connected segments with gaps
+                const impulseSegments = state.impulses.filter(s => s.type === 'impulse');
+                const impPoints = [];
+                for (const seg of impulseSegments) {
+                    impPoints.push({ time: seg.startTime, value: seg.startPrice });
+                    impPoints.push({ time: seg.endTime, value: seg.endPrice });
+                }
+                impPoints.sort((a, b) => a.time - b.time);
+                // Deduplicate by time
+                const uniqueImp = [];
+                for (const p of impPoints) {
+                    if (uniqueImp.length === 0 || uniqueImp[uniqueImp.length - 1].time !== p.time) {
+                        uniqueImp.push(p);
+                    }
+                }
+                if (uniqueImp.length > 0) advisorImpulseSeries.setData(uniqueImp);
+            }
+
+            if (correctionData.length > 0) {
+                correctionData.sort((a, b) => a.time - b.time);
+                advisorCorrectionSeries = chart.addLineSeries({
+                    color: '#ff9800',
+                    lineWidth: 2,
+                    lineStyle: LightweightCharts.LineStyle.Solid,
+                    lastValueVisible: false,
+                    priceLineVisible: false,
+                    crosshairMarkerVisible: false,
+                });
+                const corrSegments = state.impulses.filter(s => s.type === 'correction');
+                const corrPoints = [];
+                for (const seg of corrSegments) {
+                    corrPoints.push({ time: seg.startTime, value: seg.startPrice });
+                    corrPoints.push({ time: seg.endTime, value: seg.endPrice });
+                }
+                corrPoints.sort((a, b) => a.time - b.time);
+                const uniqueCorr = [];
+                for (const p of corrPoints) {
+                    if (uniqueCorr.length === 0 || uniqueCorr[uniqueCorr.length - 1].time !== p.time) {
+                        uniqueCorr.push(p);
+                    }
+                }
+                if (uniqueCorr.length > 0) advisorCorrectionSeries.setData(uniqueCorr);
+            }
+
+            // --- H1 Levels as price lines ---
+            const levels = state.levels;
+            if (levels.impulseEnd != null) {
+                advisorPriceLines.push(candleSeries.createPriceLine({
+                    price: levels.impulseEnd,
+                    color: '#e040fb',
+                    lineWidth: 2,
+                    lineStyle: LightweightCharts.LineStyle.Solid,
+                    axisLabelVisible: true,
+                    title: 'Конец имп.',
+                }));
+            }
+            if (levels.impulseStart != null) {
+                advisorPriceLines.push(candleSeries.createPriceLine({
+                    price: levels.impulseStart,
+                    color: '#e040fb',
+                    lineWidth: 1,
+                    lineStyle: LightweightCharts.LineStyle.Solid,
+                    axisLabelVisible: true,
+                    title: 'Начало имп.',
+                }));
+            }
+            if (levels.target != null) {
+                advisorPriceLines.push(candleSeries.createPriceLine({
+                    price: levels.target,
+                    color: '#00e676',
+                    lineWidth: 2,
+                    lineStyle: LightweightCharts.LineStyle.Dotted,
+                    axisLabelVisible: true,
+                    title: 'Цель',
+                }));
+            }
+
+            // --- Entry stop/take lines ---
+            if (state.entry && state.entry.valid) {
+                advisorPriceLines.push(candleSeries.createPriceLine({
+                    price: state.entry.stop,
+                    color: '#ef5350',
+                    lineWidth: 1,
+                    lineStyle: LightweightCharts.LineStyle.Dashed,
+                    axisLabelVisible: true,
+                    title: 'Stop',
+                }));
+                advisorPriceLines.push(candleSeries.createPriceLine({
+                    price: state.entry.take,
+                    color: '#00e676',
+                    lineWidth: 1,
+                    lineStyle: LightweightCharts.LineStyle.Dashed,
+                    axisLabelVisible: true,
+                    title: 'Take',
+                }));
+            }
+        }
+
+        function updateAdvisorPanel(state) {
+            const highs = state.swings.filter(s => s.type === 'high').slice(-3);
+            const lows = state.swings.filter(s => s.type === 'low').slice(-3);
+            const trendLabel = state.trend === 'up' ? 'ВОСХОДЯЩИЙ' : state.trend === 'down' ? 'НИСХОДЯЩИЙ' : 'БОКОВИК';
+            const trendArrow = state.trend === 'up' ? ' ↑' : state.trend === 'down' ? ' ↓' : ' ↔';
+            const trendClass = state.trend === 'up' ? 'up' : state.trend === 'down' ? 'down' : 'neutral';
+
+            // Impulse/correction info
+            const imps = state.impulses.filter(s => s.type === 'impulse');
+            const corrs = state.impulses.filter(s => s.type === 'correction');
+            const lastImp = imps.length > 0 ? imps[imps.length - 1] : null;
+            const lastCorr = corrs.length > 0 ? corrs[corrs.length - 1] : null;
+
+            // Current phase
+            let phaseText = 'Определение...';
+            let phaseDetail = '';
+            if (state.impulses.length > 0) {
+                const lastSeg = state.impulses[state.impulses.length - 1];
+                phaseText = lastSeg.type === 'impulse' ? 'Импульс' : 'Коррекция';
+            }
+
+            const reversal = checkReversal(state.impulses);
+
+            let html = '';
+
+            // Trend section
+            html += `<h3>Тренд H1</h3>`;
+            html += `<div><span class="${trendClass} val">${trendLabel}${trendArrow}</span></div>`;
+            if (highs.length > 0) {
+                html += `<div>Хаи: ${highs.map(h => h.price.toFixed(4)).join(' → ')}</div>`;
+            }
+            if (lows.length > 0) {
+                html += `<div>Лоу: ${lows.map(l => l.price.toFixed(4)).join(' → ')}</div>`;
+            }
+
+            // Phase section
+            html += `<h3>Фаза</h3>`;
+            html += `<div><span class="val">${phaseText}</span></div>`;
+            if (lastImp) {
+                const dir = lastImp.endPrice > lastImp.startPrice ? '+' : '';
+                html += `<div>Импульс: ${lastImp.startPrice.toFixed(4)} → ${lastImp.endPrice.toFixed(4)} (${dir}${lastImp.size.toFixed(4)})</div>`;
+            }
+            if (lastCorr) {
+                const dir = lastCorr.endPrice > lastCorr.startPrice ? '+' : '';
+                html += `<div>Коррекция: ${lastCorr.startPrice.toFixed(4)} → ${lastCorr.endPrice.toFixed(4)} (${dir}${lastCorr.size.toFixed(4)})</div>`;
+            }
+            html += `<div style="font-size:12px;color:#787b86">${reversal.reason}</div>`;
+            if (reversal.reversal) {
+                html += `<div class="down" style="font-weight:600">⚠ Сигнал разворота!</div>`;
+            }
+
+            // Levels section
+            html += `<h3>Уровни H1</h3>`;
+            if (state.levels.impulseEnd != null) {
+                html += `<div>Конец импульса: <span class="val">${state.levels.impulseEnd.toFixed(4)}</span></div>`;
+            }
+            if (state.levels.impulseStart != null) {
+                html += `<div>Начало импульса: <span class="val">${state.levels.impulseStart.toFixed(4)}</span></div>`;
+            }
+            if (state.levels.target != null) {
+                html += `<div>Цель: <span class="val signal-ok">${state.levels.target.toFixed(4)}</span></div>`;
+            }
+            if (!state.levels.impulseEnd) {
+                html += `<div class="neutral">Нет данных</div>`;
+            }
+
+            // Slom section
+            html += `<h3>Слом (M30)</h3>`;
+            if (state.slom) {
+                const s1 = state.slom.signal1;
+                const s2 = state.slom.signal2;
+                const s3 = state.slom.signal3;
+                html += `<div>Сигнал 1: ${s1 ? `<span class="signal-ok">✓ ${s1.label}</span>` : '<span class="signal-wait">—</span>'}</div>`;
+                html += `<div>Сигнал 2: ${s2 ? `<span class="signal-ok">✓ ${s2.label}</span>` : '<span class="signal-wait">ожидание...</span>'}</div>`;
+                html += `<div>Сигнал 3: ${s3 ? `<span class="signal-ok">✓ ${s3.label}</span>` : '<span class="signal-wait">ожидание...</span>'}</div>`;
+            } else {
+                html += `<div class="neutral">Паттерн не обнаружен</div>`;
+            }
+
+            // Entry section
+            html += `<h3>Вход</h3>`;
+            if (state.entry && state.entry.valid) {
+                const dir = state.entry.direction === 'up' ? 'LONG ↑' : 'SHORT ↓';
+                const dirClass = state.entry.direction === 'up' ? 'up' : 'down';
+                html += `<div class="entry-box">`;
+                html += `<div class="label">Направление</div><div class="value ${dirClass}">${dir}</div>`;
+                html += `<div class="label">Вход</div><div class="value">${state.entry.entry.toFixed(4)}</div>`;
+                html += `<div class="label">Стоп</div><div class="value down">${state.entry.stop.toFixed(4)}</div>`;
+                html += `<div class="label">Тейк</div><div class="value up">${state.entry.take.toFixed(4)}</div>`;
+                html += `<div class="label">R:R</div><div class="value">${state.entry.rr.toFixed(2)}</div>`;
+                html += `</div>`;
+            } else if (state.entry && !state.entry.valid) {
+                html += `<div class="neutral">${state.entry.reason}</div>`;
+            } else {
+                html += `<div class="neutral">—</div>`;
+            }
+
+            // Log section
+            html += `<h3>Лог решений</h3>`;
+            if (state.log.length > 0) {
+                for (const entry of state.log.slice(-10).reverse()) {
+                    html += `<div class="log-entry">${entry}</div>`;
+                }
+            } else {
+                html += `<div class="neutral">Нет записей</div>`;
+            }
+
+            advisorContent.innerHTML = html;
+        }
+
+        // --- Advisor Orchestration ---
+
+        async function runAdvisor() {
+            if (!advisorActive) return;
+
+            advisorState = {
+                h1Candles: [], m30Candles: [],
+                swings: [], trend: null, trendSwings: [],
+                impulses: [], levels: {},
+                slom: null, entry: null,
+                status: '', log: []
+            };
+
+            advisorContent.innerHTML = '<span class="neutral">Загрузка H1 и M30 данных...</span>';
+
+            try {
+                // Step 1: Fetch data
+                const data = await fetchAdvisorData(currentSymbol);
+                advisorState.h1Candles = data.h1;
+                advisorState.m30Candles = data.m30;
+                advisorState.log.push(`Загружено: H1=${data.h1.length} свечей, M30=${data.m30.length} свечей`);
+
+                if (data.h1.length < 20) {
+                    advisorState.log.push('Недостаточно H1 данных для анализа');
+                    updateAdvisorPanel(advisorState);
+                    return;
+                }
+
+                // Step 2: Find swing points
+                advisorState.swings = findSwingPoints(data.h1, 5);
+                advisorState.log.push(`Найдено ${advisorState.swings.length} свинг-точек H1 (lookback=5)`);
+
+                if (advisorState.swings.length < 4) {
+                    advisorState.log.push('Недостаточно свинг-точек для определения тренда');
+                    renderAdvisorMarkup(advisorState);
+                    updateAdvisorPanel(advisorState);
+                    return;
+                }
+
+                // Step 3: Determine trend
+                advisorState.trend = determineTrend(advisorState.swings);
+                advisorState.log.push(`Тренд H1: ${advisorState.trend === 'up' ? 'восходящий' : advisorState.trend === 'down' ? 'нисходящий' : 'боковик'}`);
+
+                // Step 4: Segment swings into impulses/corrections
+                advisorState.impulses = segmentSwings(advisorState.swings, advisorState.trend);
+                const impCount = advisorState.impulses.filter(s => s.type === 'impulse').length;
+                const corrCount = advisorState.impulses.filter(s => s.type === 'correction').length;
+                advisorState.log.push(`Сегменты: ${impCount} импульсов, ${corrCount} коррекций`);
+
+                // Step 5: Check reversal
+                const reversal = checkReversal(advisorState.impulses);
+                advisorState.log.push(`Разворот: ${reversal.reversal ? 'ДА' : 'нет'} — ${reversal.reason}`);
+
+                // Step 6: Construct levels
+                if (advisorState.trend !== 'range') {
+                    advisorState.levels = constructLevels(advisorState.impulses, advisorState.trend, advisorState.swings);
+                    if (advisorState.levels.impulseEnd != null) {
+                        advisorState.log.push(`Уровни: конец=${advisorState.levels.impulseEnd.toFixed(4)}, начало=${advisorState.levels.impulseStart.toFixed(4)}, цель=${advisorState.levels.target ? advisorState.levels.target.toFixed(4) : '—'}`);
+                    }
+                }
+
+                // Step 7: Detect Slom on M30
+                if (advisorState.trend !== 'range' && data.m30.length > 20) {
+                    advisorState.slom = detectSlom(data.m30, advisorState.trend, advisorState.levels);
+                    if (advisorState.slom) {
+                        const complete = advisorState.slom.complete ? 'полный' : 'частичный';
+                        advisorState.log.push(`Слом M30: ${complete} — S1:${advisorState.slom.signal1 ? '✓' : '—'} S2:${advisorState.slom.signal2 ? '✓' : '—'} S3:${advisorState.slom.signal3 ? '✓' : '—'}`);
+                    } else {
+                        advisorState.log.push('Слом M30: паттерн не обнаружен');
+                    }
+                }
+
+                // Step 8: Compute entry
+                if (advisorState.slom && advisorState.slom.signal2) {
+                    advisorState.entry = computeEntry(advisorState.slom, advisorState.levels, advisorState.trend);
+                    if (advisorState.entry) {
+                        advisorState.log.push(`Вход: ${advisorState.entry.valid ? 'ВАЛИДНЫЙ' : 'невалидный'} — ${advisorState.entry.reason}`);
+                    }
+                }
+
+                // Step 9: Render visualization
+                renderAdvisorMarkup(advisorState);
+
+                // Step 10: Update panel
+                updateAdvisorPanel(advisorState);
+
+            } catch (e) {
+                console.warn('Advisor error:', e);
+                advisorState.log.push(`Ошибка: ${e.message}`);
+                updateAdvisorPanel(advisorState);
+            }
+        }
+
         // --- Init ---
         async function init() {
             const loaded = await loadHistory();
             if (loaded) {
                 startPolling();
+                if (advisorActive) {
+                    runAdvisor();
+                }
             } else {
                 setStatus('Failed to load data', false);
                 overlay.classList.add('hidden');
