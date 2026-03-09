@@ -56,15 +56,14 @@
             transition: background 0.2s;
         }
         button:hover { background: #363a45; }
-        button.active {
+        button.active, button.scanning {
             background: #26a69a;
             border-color: #26a69a;
             color: #fff;
         }
-        button.stop {
-            background: #ef5350;
-            border-color: #ef5350;
-            color: #fff;
+        button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
         }
         select {
             background: #2a2e39;
@@ -119,6 +118,38 @@
         tr { transition: background 0.3s; }
         tr.clickable { cursor: pointer; }
         tr.clickable:hover { background: #1e222d; }
+        .verdict-ok { color: #00e676; font-weight: 600; }
+        .verdict-no { color: #787b86; }
+        .trade-plan {
+            background: #1a1e2a;
+            border: 1px solid #2a2e39;
+            border-radius: 6px;
+            padding: 16px 20px;
+            margin: 4px 0;
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+            gap: 12px;
+        }
+        .trade-plan-item {
+            display: flex;
+            flex-direction: column;
+            gap: 2px;
+        }
+        .trade-plan-item .label {
+            font-size: 11px;
+            color: #787b86;
+            text-transform: uppercase;
+        }
+        .trade-plan-item .value {
+            font-size: 14px;
+            color: #fff;
+            font-weight: 600;
+        }
+        .trade-plan-row td {
+            padding: 0 12px 10px;
+            border-bottom: 1px solid #2a2e39;
+        }
+        .trade-plan-row.hidden { display: none; }
         tr.signal-long {
             animation: pulseGreen 2s ease-in-out 3;
         }
@@ -180,7 +211,7 @@
             <a href="index.html">&larr; График</a>
         </div>
         <div class="header-right">
-            <button id="scanBtn" onclick="toggleScanner()">Старт</button>
+            <button id="scanBtn" onclick="scanOnce()">Сканировать</button>
         </div>
     </div>
     <div class="watchlist-config">
@@ -196,15 +227,14 @@
                 <tr>
                     <th>Пара</th>
                     <th>Тренд</th>
-                    <th>Фаза</th>
-                    <th>Имп/Корр</th>
-                    <th>Разворот</th>
-                    <th>S1</th>
-                    <th>S2</th>
-                    <th>S3</th>
+                    <th>Вердикт</th>
+                    <th>Направление</th>
                     <th>Вход</th>
+                    <th>Стоп</th>
+                    <th>Тейк</th>
                     <th>R:R</th>
-                    <th>Обновлено</th>
+                    <th>Размер позиции</th>
+                    <th>Риск / Прибыль</th>
                 </tr>
             </thead>
             <tbody id="scannerBody">
@@ -213,8 +243,8 @@
     </div>
     <div class="status-bar">
         <div class="status-dot" id="statusDot"></div>
-        <span id="statusText">Остановлен</span>
-        <span style="margin-left: auto" id="cycleInfo">—</span>
+        <span id="statusText">Готов к сканированию</span>
+        <span style="margin-left: auto" id="cycleInfo"></span>
     </div>
 
     <script>
@@ -248,11 +278,15 @@
         const DEFAULT_WATCHLIST = ['EUR/USD', 'GBP/USD', 'USD/JPY', 'USD/CHF'];
         const STORAGE_KEY = 'scannerWatchlist';
 
+        // --- Bankroll constants ---
+        const DEPOSIT = 100000; // ₽
+        const RISK_PCT = 0.01;  // 1%
+        const MAX_RISK = DEPOSIT * RISK_PCT; // 1000 ₽
+
         // --- State ---
         let scanning = false;
         let scanAbort = false;
-        let cycleTimer = null;
-        let notifiedEntries = new Set(); // track notified pair+direction to avoid spam
+        let notifiedEntries = new Set();
 
         // --- DOM refs ---
         const scanBtn = document.getElementById('scanBtn');
@@ -477,9 +511,16 @@
                 stop = slom.signal1.price + Math.abs(slom.signal2.price - slom.signal1.price) * 0.5;
                 take = levels.target;
             }
-            const rr = Math.abs(take - entry) / Math.abs(entry - stop);
-            if (rr < 2.0) return { entry, stop, take, rr, valid: false, direction: trend, reason: `R:R = ${rr.toFixed(2)} < 2.0` };
-            return { entry, stop, take, rr, direction: trend, valid: true, reason: `R:R = ${rr.toFixed(2)}` };
+            const riskPerUnit = Math.abs(entry - stop);
+            const profitPerUnit = Math.abs(take - entry);
+            const rr = profitPerUnit / riskPerUnit;
+            const positionSize = MAX_RISK / riskPerUnit;
+            const potentialProfit = positionSize * profitPerUnit;
+            const potentialLoss = MAX_RISK;
+
+            const base = { entry, stop, take, rr, direction: trend, positionSize, potentialProfit, potentialLoss };
+            if (rr < 3.0) return { ...base, valid: false, reason: `R:R ${rr.toFixed(2)} < 3.0` };
+            return { ...base, valid: true, reason: `R:R = ${rr.toFixed(2)}` };
         }
 
         // --- Rate-limited fetch ---
@@ -559,57 +600,128 @@
             return result;
         }
 
+        function formatMoney(val) {
+            return val.toLocaleString('ru-RU', { maximumFractionDigits: 0 }) + ' ₽';
+        }
+
+        function formatPrice(val) {
+            if (val == null) return '—';
+            return val >= 10 ? val.toFixed(2) : val.toFixed(5);
+        }
+
         // --- Render table row ---
         function renderRow(pair, result, isScanning) {
             const trendIcon = result.trend === 'up' ? '↑' : result.trend === 'down' ? '↓' : '↔';
             const trendClass = result.trend === 'up' ? 'up' : result.trend === 'down' ? 'down' : 'neutral';
 
-            const impCorr = (result.lastImpSize != null && result.lastCorrSize != null)
-                ? `${result.lastImpSize.toFixed(4)} / ${result.lastCorrSize.toFixed(4)}`
-                : '—';
-
-            const reversalHtml = result.reversal
-                ? '<span class="down" title="Коррекция > Импульса">⚠</span>'
-                : '<span class="neutral">—</span>';
-
-            const s1 = result.s1 ? '<span class="signal-ok">✓</span>' : '<span class="neutral">—</span>';
-            const s2 = result.s2 ? '<span class="signal-ok">✓</span>' : '<span class="neutral">—</span>';
-            const s3 = result.s3 ? '<span class="signal-ok">✓</span>' : '<span class="neutral">—</span>';
-
-            let entryHtml = '<span class="neutral">—</span>';
-            let rrHtml = '<span class="neutral">—</span>';
-            if (result.entry) {
-                if (result.entry.valid) {
-                    const dir = result.entry.direction === 'up' ? 'LONG ↑' : 'SHORT ↓';
-                    const cls = result.entry.direction === 'up' ? 'entry-long' : 'entry-short';
-                    entryHtml = `<span class="${cls}">${dir}</span>`;
-                } else {
-                    entryHtml = `<span class="neutral" title="${result.entry.reason}">—</span>`;
-                }
-                const rrVal = result.rr != null ? result.rr.toFixed(2) : '—';
-                const rrCls = result.rr >= 3 ? 'rr-good' : (result.rr >= 2 ? 'val' : 'neutral');
-                rrHtml = `<span class="${rrCls}">${rrVal}</span>`;
-            }
-
-            const time = new Date().toLocaleTimeString();
             const scanningLabel = isScanning
                 ? `<span class="scanning-pair"><span class="spinner-inline"></span>${pair}</span>`
                 : pair;
 
-            return `<tr class="clickable${result.entry && result.entry.valid ? (result.entry.direction === 'up' ? ' signal-long' : ' signal-short') : ''}" data-pair="${pair}" onclick="openChart('${pair}')">
+            const e = result.entry;
+            const hasValid = e && e.valid;
+
+            let verdictHtml, dirHtml, entryHtml, stopHtml, takeHtml, rrHtml, sizeHtml, riskProfitHtml;
+
+            if (hasValid) {
+                verdictHtml = '<span class="verdict-ok">Вход возможен</span>';
+                const dir = e.direction === 'up' ? 'LONG' : 'SHORT';
+                const cls = e.direction === 'up' ? 'entry-long' : 'entry-short';
+                dirHtml = `<span class="${cls}">${dir}</span>`;
+                entryHtml = `<span class="val">${formatPrice(e.entry)}</span>`;
+                stopHtml = `<span class="down">${formatPrice(e.stop)}</span>`;
+                takeHtml = `<span class="up">${formatPrice(e.take)}</span>`;
+                rrHtml = `<span class="rr-good">1:${e.rr.toFixed(1)}</span>`;
+                sizeHtml = `<span class="val">${e.positionSize.toFixed(2)}</span>`;
+                riskProfitHtml = `<span class="down">${formatMoney(e.potentialLoss)}</span> / <span class="up">${formatMoney(e.potentialProfit)}</span>`;
+            } else {
+                const reason = e ? e.reason : (result.trend === 'range' ? 'Нет тренда' : 'Нет сигнала');
+                verdictHtml = `<span class="verdict-no">Нет входа — ${reason}</span>`;
+                dirHtml = '<span class="neutral">—</span>';
+                entryHtml = '<span class="neutral">—</span>';
+                stopHtml = '<span class="neutral">—</span>';
+                takeHtml = '<span class="neutral">—</span>';
+                rrHtml = e ? `<span class="neutral">${e.rr.toFixed(2)}</span>` : '<span class="neutral">—</span>';
+                sizeHtml = '<span class="neutral">—</span>';
+                riskProfitHtml = '<span class="neutral">—</span>';
+            }
+
+            const rowClass = hasValid ? (e.direction === 'up' ? ' signal-long' : ' signal-short') : '';
+            const clickAction = hasValid ? `onclick="toggleTradePlan('${pair}')"` : `onclick="openChart('${pair}')"`;
+
+            let html = `<tr class="clickable${rowClass}" data-pair="${pair}" ${clickAction}>
                 <td class="val">${scanningLabel}</td>
                 <td><span class="${trendClass}">${trendIcon}</span></td>
-                <td>${result.phase}</td>
-                <td>${impCorr}</td>
-                <td>${reversalHtml}</td>
-                <td>${s1}</td>
-                <td>${s2}</td>
-                <td>${s3}</td>
+                <td>${verdictHtml}</td>
+                <td>${dirHtml}</td>
                 <td>${entryHtml}</td>
+                <td>${stopHtml}</td>
+                <td>${takeHtml}</td>
                 <td>${rrHtml}</td>
-                <td>${time}</td>
+                <td>${sizeHtml}</td>
+                <td>${riskProfitHtml}</td>
             </tr>`;
+
+            // Add hidden trade plan row for valid entries
+            if (hasValid) {
+                html += `<tr class="trade-plan-row hidden" id="plan-${pair.replace('/', '-')}">
+                    <td colspan="10">
+                        <div class="trade-plan">
+                            <div class="trade-plan-item">
+                                <span class="label">Направление</span>
+                                <span class="value ${e.direction === 'up' ? 'up' : 'down'}">${e.direction === 'up' ? 'LONG ↑' : 'SHORT ↓'}</span>
+                            </div>
+                            <div class="trade-plan-item">
+                                <span class="label">Цена входа</span>
+                                <span class="value">${formatPrice(e.entry)}</span>
+                            </div>
+                            <div class="trade-plan-item">
+                                <span class="label">Стоп-лосс</span>
+                                <span class="value down">${formatPrice(e.stop)}</span>
+                            </div>
+                            <div class="trade-plan-item">
+                                <span class="label">Тейк-профит</span>
+                                <span class="value up">${formatPrice(e.take)}</span>
+                            </div>
+                            <div class="trade-plan-item">
+                                <span class="label">R:R</span>
+                                <span class="value rr-good">1:${e.rr.toFixed(1)}</span>
+                            </div>
+                            <div class="trade-plan-item">
+                                <span class="label">Размер позиции</span>
+                                <span class="value">${e.positionSize.toFixed(2)}</span>
+                            </div>
+                            <div class="trade-plan-item">
+                                <span class="label">Риск</span>
+                                <span class="value down">${formatMoney(e.potentialLoss)}</span>
+                            </div>
+                            <div class="trade-plan-item">
+                                <span class="label">Потенц. прибыль</span>
+                                <span class="value up">${formatMoney(e.potentialProfit)}</span>
+                            </div>
+                            <div class="trade-plan-item">
+                                <span class="label">Депозит</span>
+                                <span class="value">${formatMoney(DEPOSIT)}</span>
+                            </div>
+                            <div class="trade-plan-item">
+                                <span class="label">Риск на сделку</span>
+                                <span class="value">${(RISK_PCT * 100).toFixed(0)}% = ${formatMoney(MAX_RISK)}</span>
+                            </div>
+                        </div>
+                    </td>
+                </tr>`;
+            }
+
+            return html;
         }
+
+        // --- Toggle trade plan visibility ---
+        window.toggleTradePlan = function(pair) {
+            const planRow = document.getElementById('plan-' + pair.replace('/', '-'));
+            if (planRow) {
+                planRow.classList.toggle('hidden');
+            }
+        };
 
         // --- Notifications ---
         function requestNotificationPermission() {
@@ -679,12 +791,12 @@
         }
 
         function updateRowForPair(pair, result, isScanning) {
-            const rows = scannerBody.querySelectorAll('tr');
-            const pairs = getWatchlist();
-            const idx = pairs.indexOf(pair);
-            if (idx >= 0 && rows[idx]) {
-                rows[idx].outerHTML = renderRow(pair, result, isScanning);
-            }
+            const mainRow = scannerBody.querySelector(`tr[data-pair="${pair}"]`);
+            if (!mainRow) return;
+            const planId = 'plan-' + pair.replace('/', '-');
+            const existingPlan = document.getElementById(planId);
+            if (existingPlan) existingPlan.remove();
+            mainRow.outerHTML = renderRow(pair, result, isScanning);
         }
 
         async function runScannerCycle() {
@@ -753,35 +865,28 @@
             if (scanAbort) return;
 
             const elapsed = ((Date.now() - cycleStart) / 1000).toFixed(0);
-            statusText.textContent = `Цикл завершён за ${elapsed}с. Следующий через 30с...`;
-            cycleInfo.textContent = `Последний цикл: ${new Date().toLocaleTimeString()}`;
-
-            // Wait 30s then repeat
-            cycleTimer = setTimeout(() => runScannerCycle(), 30000);
+            const finishTime = new Date().toLocaleTimeString();
+            statusText.textContent = `Анализ завершён в ${finishTime} (${elapsed}с)`;
+            cycleInfo.textContent = '';
+            scanning = false;
+            scanBtn.disabled = false;
+            scanBtn.textContent = 'Сканировать';
+            scanBtn.classList.remove('scanning');
+            statusDot.classList.remove('active');
         }
 
-        // --- Toggle scanner (exposed globally) ---
-        window.toggleScanner = function() {
-            if (scanning) {
-                // Stop
-                scanning = false;
-                scanAbort = true;
-                if (cycleTimer) { clearTimeout(cycleTimer); cycleTimer = null; }
-                scanBtn.textContent = 'Старт';
-                scanBtn.classList.remove('stop');
-                statusDot.classList.remove('active');
-                statusText.textContent = 'Остановлен';
-            } else {
-                // Start
-                scanning = true;
-                scanAbort = false;
-                scanBtn.textContent = 'Стоп';
-                scanBtn.classList.add('stop');
-                statusDot.classList.add('active');
-                requestNotificationPermission();
-                initTableRows();
-                runScannerCycle();
-            }
+        // --- Scan once (exposed globally) ---
+        window.scanOnce = function() {
+            if (scanning) return;
+            scanning = true;
+            scanAbort = false;
+            scanBtn.disabled = true;
+            scanBtn.textContent = 'Сканирование...';
+            scanBtn.classList.add('scanning');
+            statusDot.classList.add('active');
+            requestNotificationPermission();
+            initTableRows();
+            runScannerCycle();
         };
 
         // --- Open chart with pair ---
