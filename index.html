@@ -331,7 +331,12 @@
         }
 
         function handleTick(price, timestamp) {
-            const time = getCandleTime(timestamp);
+            let time = getCandleTime(timestamp);
+
+            // Ensure new time is not before the last candle (timezone mismatch fix)
+            if (currentCandle && time < currentCandle.time) {
+                time = currentCandle.time;
+            }
 
             if (!currentCandle || currentCandle.time !== time) {
                 currentCandle = { time, open: price, high: price, low: price, close: price };
