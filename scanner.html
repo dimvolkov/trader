@@ -528,20 +528,28 @@
             return new Promise(resolve => setTimeout(resolve, ms));
         }
 
-        async function fetchTimeSeries(symbol, interval) {
+        async function fetchTimeSeries(symbol, interval, retries = 3) {
             const url = `${API_BASE}/time_series?symbol=${symbol}&interval=${interval}&outputsize=500&apikey=${API_KEY}`;
-            const res = await fetch(url);
-            const data = await res.json();
-            if (data.status === 'ok' && data.values) {
-                return data.values.reverse().map(v => ({
-                    time: parseDatetime(v.datetime),
-                    open: parseFloat(v.open),
-                    high: parseFloat(v.high),
-                    low: parseFloat(v.low),
-                    close: parseFloat(v.close),
-                }));
+            for (let attempt = 0; attempt <= retries; attempt++) {
+                const res = await fetch(url);
+                const data = await res.json();
+                if (data.status === 'ok' && data.values) {
+                    return data.values.reverse().map(v => ({
+                        time: parseDatetime(v.datetime),
+                        open: parseFloat(v.open),
+                        high: parseFloat(v.high),
+                        low: parseFloat(v.low),
+                        close: parseFloat(v.close),
+                    }));
+                }
+                if (data.code === 429 && attempt < retries) {
+                    statusText.textContent = `Rate limit — жду 15с (попытка ${attempt + 2}/${retries + 1})...`;
+                    await delay(15000);
+                    continue;
+                }
+                if (data.code === 429) throw new Error('Rate limit (429)');
+                return [];
             }
-            if (data.code === 429) throw new Error('Rate limit (429)');
             return [];
         }
 
@@ -837,7 +845,7 @@
                     if (scanAbort) return;
 
                     // Wait before next API call
-                    await delay(8000);
+                    await delay(12000);
                     if (scanAbort) return;
 
                     // Fetch M30
@@ -869,7 +877,7 @@
 
                 // Wait between pairs (except after last)
                 if (i < pairs.length - 1 && !scanAbort) {
-                    await delay(8000);
+                    await delay(12000);
                 }
             }
 
