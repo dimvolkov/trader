@@ -166,7 +166,7 @@
         const API_KEY = '8694f4e28a974a0eba808458ceb33bfb';
         let currentSymbol = 'USD/RUB';
         const API_BASE = 'https://api.twelvedata.com';
-        const POLL_INTERVAL = 5000;
+        const POLL_INTERVAL = 10000;
 
         const PAIRS = {
             'RUB пары': [
@@ -275,8 +275,6 @@
             currentCandle = null;
             openPrice = null;
             stopPolling();
-            if (ws) { ws.onclose = null; ws.close(); ws = null; }
-            wsRetries = 0;
             overlay.classList.remove('hidden');
             init();
         });
@@ -423,50 +421,7 @@
             if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
         }
 
-        // --- WebSocket realtime ---
-        let ws = null;
-        let wsRetries = 0;
-
-        function connectWebSocket() {
-            try {
-                ws = new WebSocket(`wss://ws.twelvedata.com/v1/quotes/price?apikey=${API_KEY}`);
-            } catch (e) {
-                console.warn('WS init failed, falling back to polling');
-                startPolling();
-                return;
-            }
-
-            ws.onopen = () => {
-                wsRetries = 0;
-                stopPolling();
-                setStatus('Connected (realtime)', true);
-                ws.send(JSON.stringify({
-                    action: 'subscribe',
-                    params: { symbols: currentSymbol }
-                }));
-            };
-
-            ws.onmessage = (event) => {
-                const msg = JSON.parse(event.data);
-                if (msg.event === 'price' && msg.price) {
-                    handleTick(parseFloat(msg.price), msg.timestamp ? msg.timestamp * 1000 : Date.now());
-                }
-            };
-
-            ws.onclose = () => {
-                setStatus('Disconnected', false);
-                if (wsRetries < 3) {
-                    wsRetries++;
-                    setTimeout(connectWebSocket, 3000 * wsRetries);
-                } else {
-                    startPolling();
-                }
-            };
-
-            ws.onerror = () => {
-                ws.close();
-            };
-        }
+        // WebSocket not available on free Twelve Data plan — using polling only
 
         // --- Support & Resistance levels ---
         function clearPriceLines() {
@@ -531,7 +486,7 @@
         async function init() {
             const loaded = await loadHistory();
             if (loaded) {
-                connectWebSocket();
+                startPolling();
             } else {
                 setStatus('Failed to load data', false);
                 overlay.classList.add('hidden');
