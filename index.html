@@ -388,6 +388,7 @@
                         currentCandle = last;
                         updatePrice(last.close);
                         drawSupportResistance(candles);
+                        drawPeriodSeparators(candles);
                     }
                     overlay.classList.add('hidden');
                     return true;
@@ -469,6 +470,33 @@
             const supports = merged.filter(l => l.type === 'support').sort((a, b) => b.count - a.count).slice(0, 4);
             const resistances = merged.filter(l => l.type === 'resistance').sort((a, b) => b.count - a.count).slice(0, 4);
             return [...supports, ...resistances];
+        }
+
+        function drawPeriodSeparators(candles) {
+            if (candles.length < 2) return;
+            // Only for intraday timeframes
+            if (['W', 'M', 'Y'].includes(currentTF)) {
+                candleSeries.setMarkers([]);
+                return;
+            }
+            const markers = [];
+            let prevDay = null;
+            for (const c of candles) {
+                const d = new Date(c.time * 1000);
+                const day = d.getUTCFullYear() * 10000 + (d.getUTCMonth() + 1) * 100 + d.getUTCDate();
+                if (prevDay !== null && day !== prevDay) {
+                    markers.push({
+                        time: c.time,
+                        position: 'aboveBar',
+                        color: '#363a45',
+                        shape: 'square',
+                        size: 0.01,
+                        text: (d.getUTCDate() + '.' + (d.getUTCMonth() + 1).toString().padStart(2, '0')),
+                    });
+                }
+                prevDay = day;
+            }
+            candleSeries.setMarkers(markers);
         }
 
         function drawSupportResistance(candles) {
