@@ -566,14 +566,17 @@
             const url = `https://fcsapi.com/api-v3/forex/history?symbol=${symbol}&period=${period}&access_key=${getChartApiKey('fcsapi')}`;
             const res = await fetch(url);
             const data = await res.json();
-            if (data.response && Array.isArray(data.response) && data.response.length > 0) {
-                return data.response.map(q => ({
+            let candles = data.response;
+            if (candles && !Array.isArray(candles)) candles = Object.values(candles);
+            if (candles && candles.length > 0 && candles[0].o) {
+                return candles.map(q => ({
                     time: parseInt(q.t) || parseDatetime(q.tm),
                     open: parseFloat(q.o), high: parseFloat(q.h),
                     low: parseFloat(q.l), close: parseFloat(q.c),
                 }));
             }
-            if (data.msg) throw new Error(data.msg);
+            if (data.status === false || data.code) throw new Error(data.msg || 'FCS API error');
+            if (!candles || candles.length === 0) throw new Error('Нет данных от FCS API');
             return [];
         }
 
