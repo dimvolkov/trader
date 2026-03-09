@@ -442,7 +442,7 @@
                 setStatus('Connected (realtime)', true);
                 ws.send(JSON.stringify({
                     action: 'subscribe',
-                    params: { symbols: SYMBOL }
+                    params: { symbols: currentSymbol }
                 }));
             };
 
