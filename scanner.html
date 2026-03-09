@@ -375,7 +375,7 @@
         }
 
         function getDataSource() {
-            return dataSourceSelect.value;
+            return loadDataSource();
         }
 
         function loadDataSource() {
@@ -1162,8 +1162,13 @@
         };
 
         // --- Init ---
-        dataSourceSelect.value = loadDataSource();
-        apiKeyInput.value = getApiKey(loadDataSource());
+        function syncSourceUI() {
+            dataSourceSelect.value = loadDataSource();
+            apiKeyInput.value = getApiKey(loadDataSource());
+        }
+        syncSourceUI();
+        // Sync when returning from settings page
+        window.addEventListener('focus', syncSourceUI);
         populateSelectors();
         initTableRows();
     })();
