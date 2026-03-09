@@ -169,20 +169,44 @@
             background: #1a1e2a;
             border: 1px solid #2a2e39;
             border-radius: 8px;
-            padding: 12px 16px;
+            padding: 16px;
             margin-bottom: 20px;
+        }
+        .active-row {
             display: flex;
             align-items: center;
             justify-content: space-between;
+            margin-bottom: 8px;
         }
+        .active-row:last-child { margin-bottom: 0; }
         .active-label {
             font-size: 13px;
             color: #787b86;
         }
         .active-value {
-            font-size: 15px;
+            font-size: 14px;
             font-weight: 700;
             color: #26a69a;
+        }
+        .role-btns {
+            display: flex;
+            gap: 6px;
+            margin-top: 8px;
+        }
+        .role-btn {
+            font-size: 11px;
+            padding: 3px 10px;
+            border-radius: 12px;
+            border: 1px solid #363a45;
+            background: #2a2e39;
+            color: #787b86;
+            cursor: pointer;
+        }
+        .role-btn:hover { border-color: #2962ff; color: #d1d4dc; }
+        .role-btn.role-active {
+            background: #2962ff;
+            border-color: #2962ff;
+            color: #fff;
         }
     </style>
 </head>
@@ -196,8 +220,14 @@
     </div>
     <div class="content">
         <div class="active-source-bar">
-            <span class="active-label">Активный источник:</span>
-            <span class="active-value" id="activeSourceLabel">—</span>
+            <div class="active-row">
+                <span class="active-label">График:</span>
+                <span class="active-value" id="chartSourceLabel">—</span>
+            </div>
+            <div class="active-row">
+                <span class="active-label">Сканер:</span>
+                <span class="active-value" id="scannerSourceLabel">—</span>
+            </div>
         </div>
 
         <div class="section">
@@ -292,7 +322,8 @@
         ];
 
         const APIKEYS_STORAGE = 'chartApiKeys';
-        const SOURCE_STORAGE = 'chartDataSource';
+        const CHART_SOURCE = 'chartDataSource';
+        const SCANNER_SOURCE = 'scannerDataSource';
 
         function loadKeys() {
             try { const k = JSON.parse(localStorage.getItem(APIKEYS_STORAGE)); if (k && typeof k === 'object') return k; } catch {}
@@ -300,15 +331,15 @@
         }
         function saveKeys(keys) {
             localStorage.setItem(APIKEYS_STORAGE, JSON.stringify(keys));
+            // Sync to scanner legacy key
+            localStorage.setItem('scannerApiKeys', JSON.stringify(keys));
         }
-        function loadActiveSource() {
-            try { const s = localStorage.getItem(SOURCE_STORAGE); if (s) return s; } catch {}
+        function getSource(role) {
+            try { const s = localStorage.getItem(role === 'scanner' ? SCANNER_SOURCE : CHART_SOURCE); if (s) return s; } catch {}
             return 'twelvedata';
         }
-        function setActiveSource(id) {
-            localStorage.setItem(SOURCE_STORAGE, id);
-            // Also sync to scanner
-            localStorage.setItem('scannerDataSource', id);
+        function setSource(role, id) {
+            localStorage.setItem(role === 'scanner' ? SCANNER_SOURCE : CHART_SOURCE, id);
             renderAll();
         }
         function getKey(sourceId) {
@@ -318,26 +349,34 @@
         }
 
         function renderAll() {
-            const active = loadActiveSource();
-            document.getElementById('activeSourceLabel').textContent =
-                SOURCES.find(s => s.id === active)?.name || active;
+            const chartSrc = getSource('chart');
+            const scannerSrc = getSource('scanner');
+            document.getElementById('chartSourceLabel').textContent =
+                SOURCES.find(s => s.id === chartSrc)?.name || chartSrc;
+            document.getElementById('scannerSourceLabel').textContent =
+                SOURCES.find(s => s.id === scannerSrc)?.name || scannerSrc;
 
             const container = document.getElementById('sourceCards');
             container.innerHTML = '';
 
             for (const src of SOURCES) {
                 const key = getKey(src.id);
-                const isActive = src.id === active;
+                const isChart = src.id === chartSrc;
+                const isScanner = src.id === scannerSrc;
                 const hasKey = !!key;
 
+                const badges = [];
+                if (isChart) badges.push('<span class="source-badge badge-active">График</span>');
+                if (isScanner) badges.push('<span class="source-badge badge-active">Сканер</span>');
+                if (!isChart && !isScanner && hasKey) badges.push('<span class="source-badge badge-configured">Ключ задан</span>');
+                if (!hasKey) badges.push('<span class="source-badge badge-empty">Нет ключа</span>');
+
                 const card = document.createElement('div');
-                card.className = 'source-card' + (isActive ? ' active-source' : '');
+                card.className = 'source-card' + (isChart || isScanner ? ' active-source' : '');
                 card.innerHTML = `
                     <div class="source-header">
                         <span class="source-name">${src.name}</span>
-                        ${isActive ? '<span class="source-badge badge-active">Активный</span>'
-                          : hasKey ? '<span class="source-badge badge-configured">Ключ задан</span>'
-                          : '<span class="source-badge badge-empty">Нет ключа</span>'}
+                        <span>${badges.join(' ')}</span>
                     </div>
                     <div class="source-info">
                         Лимиты: ${src.limits}<br>
@@ -352,15 +391,16 @@
                     <div class="btn-row">
                         <button class="btn btn-primary" onclick="saveKey('${src.id}')">Сохранить</button>
                         <button class="btn btn-test" onclick="testKey('${src.id}')" id="testBtn-${src.id}">Проверить</button>
-                        ${!isActive && hasKey ? `<button class="btn btn-use" onclick="useSource('${src.id}')">Использовать</button>` : ''}
+                    </div>
+                    <div class="role-btns">
+                        <span style="font-size:11px;color:#787b86;margin-right:4px">Назначить:</span>
+                        <button class="role-btn ${isChart ? 'role-active' : ''}" onclick="assignRole('${src.id}','chart')">График</button>
+                        <button class="role-btn ${isScanner ? 'role-active' : ''}" onclick="assignRole('${src.id}','scanner')">Сканер</button>
                     </div>
                     <div class="test-result" id="testResult-${src.id}"></div>
                 `;
                 container.appendChild(card);
             }
-
-            // Also sync scanner API keys
-            localStorage.setItem('scannerApiKeys', JSON.stringify(loadKeys()));
         }
 
         window.saveKey = function(sourceId) {
@@ -371,14 +411,14 @@
             renderAll();
         };
 
-        window.useSource = function(sourceId) {
+        window.assignRole = function(sourceId, role) {
             const key = getKey(sourceId);
             if (!key) {
                 document.getElementById('testResult-' + sourceId).innerHTML =
                     '<span class="test-fail">Сначала введите и сохраните ключ</span>';
                 return;
             }
-            setActiveSource(sourceId);
+            setSource(role, sourceId);
         };
 
         window.testKey = function(sourceId) {
