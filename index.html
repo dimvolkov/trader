@@ -226,7 +226,7 @@
         <span style="margin-left: auto" id="lastUpdate">--</span>
     </div>
 
-    <script src="https://unpkg.com/lightweight-charts@4.1.1/dist/lightweight-charts.standalone.production.js"></script>
+    <script src="lightweight-charts.js"></script>
     <script>
     (function() {
         const API_KEY = '8694f4e28a974a0eba808458ceb33bfb';
@@ -508,9 +508,15 @@
                     return true;
                 } else {
                     console.warn('API response:', data);
+                    if (data.code === 429) {
+                        overlay.innerHTML = '<div class="overlay-content" style="color:#ef5350">API лимит исчерпан.<br>Попробуйте позже или смените ключ.</div>';
+                    } else {
+                        overlay.innerHTML = '<div class="overlay-content" style="color:#ef5350">Ошибка загрузки данных</div>';
+                    }
                 }
             } catch (e) {
                 console.warn('History load failed:', e);
+                overlay.innerHTML = '<div class="overlay-content" style="color:#ef5350">Ошибка соединения с API</div>';
             }
             return false;
         }
