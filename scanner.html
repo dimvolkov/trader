@@ -215,6 +215,12 @@
         </div>
     </div>
     <div class="watchlist-config">
+        <label>Источник:</label>
+        <select id="dataSource" onchange="saveSettings()">
+            <option value="twelvedata">Twelve Data</option>
+            <option value="tradermade">TraderMade</option>
+            <option value="polygon">Polygon.io</option>
+        </select>
         <label>Watchlist:</label>
         <select id="pair1"></select>
         <select id="pair2"></select>
@@ -249,8 +255,26 @@
 
     <script>
     (function() {
-        const API_KEY = '8694f4e28a974a0eba808458ceb33bfb';
-        const API_BASE = 'https://api.twelvedata.com';
+        // --- Data source configs ---
+        const DATA_SOURCES = {
+            twelvedata: {
+                label: 'Twelve Data',
+                apiKey: '8694f4e28a974a0eba808458ceb33bfb',
+                rateDelay: 12000, // ms between requests
+            },
+            tradermade: {
+                label: 'TraderMade',
+                apiKey: '', // вставьте свой ключ
+                rateDelay: 3000,
+            },
+            polygon: {
+                label: 'Polygon.io',
+                apiKey: '', // вставьте свой ключ
+                rateDelay: 12000,
+            },
+        };
+
+        const SOURCE_STORAGE_KEY = 'scannerDataSource';
 
         const PAIRS = {
             'RUB пары': [
@@ -294,6 +318,7 @@
         const statusText = document.getElementById('statusText');
         const cycleInfo = document.getElementById('cycleInfo');
         const scannerBody = document.getElementById('scannerBody');
+        const dataSourceSelect = document.getElementById('dataSource');
         const pairSelects = [
             document.getElementById('pair1'),
             document.getElementById('pair2'),
@@ -337,6 +362,23 @@
         function saveWatchlist() {
             localStorage.setItem(STORAGE_KEY, JSON.stringify(getWatchlist()));
         }
+
+        function getDataSource() {
+            return dataSourceSelect.value;
+        }
+
+        function loadDataSource() {
+            try {
+                const saved = localStorage.getItem(SOURCE_STORAGE_KEY);
+                if (saved && DATA_SOURCES[saved]) return saved;
+            } catch {}
+            return 'twelvedata';
+        }
+
+        window.saveSettings = function() {
+            localStorage.setItem(SOURCE_STORAGE_KEY, getDataSource());
+            saveWatchlist();
+        };
 
         // --- Analysis functions (copied from index.html) ---
 
@@ -528,27 +570,124 @@
             return new Promise(resolve => setTimeout(resolve, ms));
         }
 
+        // Convert "EUR/USD" → "EURUSD"
+        function pairConcat(symbol) {
+            return symbol.replace('/', '');
+        }
+
+        // --- Twelve Data ---
+        async function fetchTwelveData(symbol, interval) {
+            const cfg = DATA_SOURCES.twelvedata;
+            const url = `https://api.twelvedata.com/time_series?symbol=${symbol}&interval=${interval}&outputsize=500&apikey=${cfg.apiKey}`;
+            const res = await fetch(url);
+            const data = await res.json();
+            if (data.status === 'ok' && data.values) {
+                return data.values.reverse().map(v => ({
+                    time: parseDatetime(v.datetime),
+                    open: parseFloat(v.open),
+                    high: parseFloat(v.high),
+                    low: parseFloat(v.low),
+                    close: parseFloat(v.close),
+                }));
+            }
+            if (data.code === 429) throw new Error('Rate limit (429)');
+            return [];
+        }
+
+        // --- TraderMade ---
+        async function fetchTraderMade(symbol, interval) {
+            const cfg = DATA_SOURCES.tradermade;
+            const pair = pairConcat(symbol);
+            // interval: "1h" → hourly, "30min" → minute period=30
+            let tmInterval, tmPeriod = '';
+            if (interval === '1h') {
+                tmInterval = 'hourly';
+            } else if (interval === '30min') {
+                tmInterval = 'minute';
+                tmPeriod = '&period=30';
+            } else {
+                tmInterval = 'daily';
+            }
+            // TraderMade: hourly max 2 months, minute max 5 days
+            const now = new Date();
+            const daysBack = tmInterval === 'minute' ? 4 : 30;
+            const from = new Date(now.getTime() - daysBack * 86400000);
+            const startDate = from.toISOString().slice(0, 10);
+            const endDate = now.toISOString().slice(0, 10);
+            const url = `https://marketdata.tradermade.com/api/v1/timeseries?currency=${pair}&api_key=${cfg.apiKey}&start_date=${startDate}&end_date=${endDate}&interval=${tmInterval}${tmPeriod}&format=records`;
+            const res = await fetch(url);
+            const data = await res.json();
+            if (data.quotes && Array.isArray(data.quotes)) {
+                return data.quotes.map(q => ({
+                    time: parseDatetime(q.date),
+                    open: parseFloat(q.open),
+                    high: parseFloat(q.high),
+                    low: parseFloat(q.low),
+                    close: parseFloat(q.close),
+                }));
+            }
+            if (data.error || (data.errors && data.errors.length > 0)) {
+                const msg = data.error || data.errors[0]?.message || 'API error';
+                if (msg.includes('rate') || msg.includes('limit') || msg.includes('429')) throw new Error('Rate limit (429)');
+                throw new Error(msg);
+            }
+            return [];
+        }
+
+        // --- Polygon.io ---
+        async function fetchPolygon(symbol, interval) {
+            const cfg = DATA_SOURCES.polygon;
+            const ticker = 'C:' + pairConcat(symbol);
+            // interval: "1h" → 1/hour, "30min" → 30/minute
+            let multiplier, timespan;
+            if (interval === '1h') {
+                multiplier = 1; timespan = 'hour';
+            } else if (interval === '30min') {
+                multiplier = 30; timespan = 'minute';
+            } else {
+                multiplier = 1; timespan = 'day';
+            }
+            const now = new Date();
+            const from = new Date(now.getTime() - 60 * 86400000); // 60 days back
+            const fromDate = from.toISOString().slice(0, 10);
+            const toDate = now.toISOString().slice(0, 10);
+            const url = `https://api.polygon.io/v2/aggs/ticker/${ticker}/range/${multiplier}/${timespan}/${fromDate}/${toDate}?adjusted=true&sort=asc&limit=5000&apiKey=${cfg.apiKey}`;
+            const res = await fetch(url);
+            const data = await res.json();
+            if (data.status === 'OK' && data.results) {
+                return data.results.map(r => ({
+                    time: Math.floor(r.t / 1000), // ms → sec
+                    open: r.o,
+                    high: r.h,
+                    low: r.l,
+                    close: r.c,
+                }));
+            }
+            if (data.status === 'ERROR') {
+                const msg = data.error || data.message || 'API error';
+                if (msg.includes('rate') || msg.includes('limit')) throw new Error('Rate limit (429)');
+                throw new Error(msg);
+            }
+            return [];
+        }
+
+        // --- Universal fetch with retry ---
         async function fetchTimeSeries(symbol, interval, retries = 3) {
-            const url = `${API_BASE}/time_series?symbol=${symbol}&interval=${interval}&outputsize=500&apikey=${API_KEY}`;
+            const source = getDataSource();
+            const fetchFn = source === 'tradermade' ? fetchTraderMade
+                          : source === 'polygon' ? fetchPolygon
+                          : fetchTwelveData;
             for (let attempt = 0; attempt <= retries; attempt++) {
-                const res = await fetch(url);
-                const data = await res.json();
-                if (data.status === 'ok' && data.values) {
-                    return data.values.reverse().map(v => ({
-                        time: parseDatetime(v.datetime),
-                        open: parseFloat(v.open),
-                        high: parseFloat(v.high),
-                        low: parseFloat(v.low),
-                        close: parseFloat(v.close),
-                    }));
+                try {
+                    return await fetchFn(symbol, interval);
+                } catch (err) {
+                    if (err.message.includes('429') && attempt < retries) {
+                        statusText.textContent = `Rate limit — жду 15с (попытка ${attempt + 2}/${retries + 1})...`;
+                        await delay(15000);
+                        continue;
+                    }
+                    throw err;
                 }
-                if (data.code === 429 && attempt < retries) {
-                    statusText.textContent = `Rate limit — жду 15с (попытка ${attempt + 2}/${retries + 1})...`;
-                    await delay(15000);
-                    continue;
-                }
-                if (data.code === 429) throw new Error('Rate limit (429)');
-                return [];
             }
             return [];
         }
@@ -822,14 +961,27 @@
             if (!scanning) return;
 
             const pairs = getWatchlist();
+            const source = getDataSource();
+            const rateDelay = DATA_SOURCES[source].rateDelay;
             const cycleStart = Date.now();
             notifiedEntries.clear();
+
+            // Check API key
+            if (!DATA_SOURCES[source].apiKey) {
+                statusText.textContent = `Ошибка: не указан API ключ для ${DATA_SOURCES[source].label}`;
+                scanning = false;
+                scanBtn.disabled = false;
+                scanBtn.textContent = 'Сканировать';
+                scanBtn.classList.remove('scanning');
+                statusDot.classList.remove('active');
+                return;
+            }
 
             for (let i = 0; i < pairs.length; i++) {
                 if (scanAbort) return;
 
                 const pair = pairs[i];
-                statusText.textContent = `Сканирование ${pair} (${i + 1}/${pairs.length})...`;
+                statusText.textContent = `[${DATA_SOURCES[source].label}] ${pair} (${i + 1}/${pairs.length})...`;
 
                 // Show scanning indicator
                 updateRowForPair(pair, pairResults[pair] || {
@@ -845,7 +997,7 @@
                     if (scanAbort) return;
 
                     // Wait before next API call
-                    await delay(12000);
+                    await delay(rateDelay);
                     if (scanAbort) return;
 
                     // Fetch M30
@@ -877,7 +1029,7 @@
 
                 // Wait between pairs (except after last)
                 if (i < pairs.length - 1 && !scanAbort) {
-                    await delay(12000);
+                    await delay(rateDelay);
                 }
             }
 
@@ -914,6 +1066,7 @@
         };
 
         // --- Init ---
+        dataSourceSelect.value = loadDataSource();
         populateSelectors();
         initTableRows();
     })();
