@@ -566,18 +566,25 @@
             const url = `https://fcsapi.com/api-v3/forex/history?symbol=${symbol}&period=${period}&access_key=${getChartApiKey('fcsapi')}`;
             const res = await fetch(url);
             const data = await res.json();
+            console.log('FCS API raw response:', JSON.stringify(data).substring(0, 500));
+            if (!data.response || data.code === 101 || data.code === 102 ||
+                String(data.status).toLowerCase() === 'false' || data.status === 0) {
+                throw new Error(data.msg || data.message || 'FCS API error');
+            }
             let candles = data.response;
             if (candles && !Array.isArray(candles)) candles = Object.values(candles);
-            if (candles && candles.length > 0 && candles[0].o) {
-                return candles.map(q => ({
-                    time: parseInt(q.t) || parseDatetime(q.tm),
-                    open: parseFloat(q.o), high: parseFloat(q.h),
-                    low: parseFloat(q.l), close: parseFloat(q.c),
-                }));
-            }
-            if (data.status === false || data.code) throw new Error(data.msg || 'FCS API error');
             if (!candles || candles.length === 0) throw new Error('Нет данных от FCS API');
-            return [];
+            const first = candles[0];
+            const oField = first.o !== undefined ? 'o' : first.open !== undefined ? 'open' : null;
+            const hField = first.h !== undefined ? 'h' : first.high !== undefined ? 'high' : null;
+            const lField = first.l !== undefined ? 'l' : first.low !== undefined ? 'low' : null;
+            const cField = first.c !== undefined ? 'c' : first.close !== undefined ? 'close' : null;
+            if (!oField) throw new Error('FCS API: неизвестный формат свечей: ' + Object.keys(first).join(','));
+            return candles.map(q => ({
+                time: parseInt(q.t) || parseDatetime(q.tm) || Math.floor(new Date(q.tm || q.time || q.date).getTime() / 1000),
+                open: parseFloat(q[oField]), high: parseFloat(q[hField]),
+                low: parseFloat(q[lField]), close: parseFloat(q[cField]),
+            }));
         }
 
         // --- Alpha Vantage ---
