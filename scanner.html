@@ -634,14 +634,25 @@
                 rrHtml = `<span class="rr-good">1:${e.rr.toFixed(1)}</span>`;
                 sizeHtml = `<span class="val">${e.positionSize.toFixed(2)}</span>`;
                 riskProfitHtml = `<span class="down">${formatMoney(e.potentialLoss)}</span> / <span class="up">${formatMoney(e.potentialProfit)}</span>`;
+            } else if (e) {
+                // Entry computed but invalid (R:R too low) — show data in muted style
+                verdictHtml = `<span class="verdict-no">Нет входа — ${e.reason}</span>`;
+                const dir = e.direction === 'up' ? 'LONG' : 'SHORT';
+                dirHtml = `<span class="neutral">${dir}</span>`;
+                entryHtml = `<span class="neutral">${formatPrice(e.entry)}</span>`;
+                stopHtml = `<span class="neutral">${formatPrice(e.stop)}</span>`;
+                takeHtml = `<span class="neutral">${formatPrice(e.take)}</span>`;
+                rrHtml = `<span class="neutral">1:${e.rr.toFixed(1)}</span>`;
+                sizeHtml = `<span class="neutral">${e.positionSize.toFixed(2)}</span>`;
+                riskProfitHtml = `<span class="neutral">${formatMoney(e.potentialLoss)} / ${formatMoney(e.potentialProfit)}</span>`;
             } else {
-                const reason = e ? e.reason : (result.trend === 'range' ? 'Нет тренда' : 'Нет сигнала');
+                const reason = result.trend === 'range' ? 'Нет тренда' : 'Нет сигнала';
                 verdictHtml = `<span class="verdict-no">Нет входа — ${reason}</span>`;
                 dirHtml = '<span class="neutral">—</span>';
                 entryHtml = '<span class="neutral">—</span>';
                 stopHtml = '<span class="neutral">—</span>';
                 takeHtml = '<span class="neutral">—</span>';
-                rrHtml = e ? `<span class="neutral">${e.rr.toFixed(2)}</span>` : '<span class="neutral">—</span>';
+                rrHtml = '<span class="neutral">—</span>';
                 sizeHtml = '<span class="neutral">—</span>';
                 riskProfitHtml = '<span class="neutral">—</span>';
             }
