@@ -1658,6 +1658,17 @@
         if (overlayInfo) overlayInfo.textContent = `Источник: ${srcName}`;
 
         document.getElementById('loadChartBtn').addEventListener('click', startChart);
+
+        // Auto-start chart + advisor when opened from scanner with analyze=1
+        const urlParams = new URLSearchParams(window.location.search);
+        if (urlParams.get('analyze') === '1') {
+            (async () => {
+                await startChart();
+                if (!advisorActive) {
+                    advisorBtn.click();
+                }
+            })();
+        }
     })();
     </script>
 </body>

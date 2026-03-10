@@ -1115,7 +1115,7 @@
                 <td>${sizeHtml}</td>
                 <td>${riskProfitHtml}</td>
                 <td class="neutral scan-time" onclick="event.stopPropagation(); toggleHistory('${pair}')" title="Показать историю">${result.scanTime ? new Date(result.scanTime).toLocaleTimeString() : '—'}</td>
-                <td><button class="chart-btn" onclick="event.stopPropagation(); openChart('${pair}')" title="Открыть график">📈</button></td>
+                <td><button class="chart-btn" onclick="event.stopPropagation(); openChart('${pair}', ${hasValid})" title="Открыть график">📈</button></td>
             </tr>`;
 
             // Add hidden history row
@@ -1827,8 +1827,9 @@
         window.pairMouseLeave = function() { hideTooltip(); };
 
         // --- Open chart with pair ---
-        window.openChart = function(pair) {
-            window.open(`index.html?pair=${encodeURIComponent(pair)}`, '_blank');
+        window.openChart = function(pair, withAnalysis) {
+            const analyze = withAnalysis ? '&analyze=1' : '';
+            window.open(`index.html?pair=${encodeURIComponent(pair)}${analyze}`, '_blank');
         };
 
         // --- Init ---
