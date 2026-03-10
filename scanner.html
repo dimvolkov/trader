@@ -214,6 +214,47 @@
         }
         @keyframes spin { to { transform: rotate(360deg); } }
         .scanning-pair { color: #2962ff; }
+        .pair-tooltip {
+            position: fixed;
+            background: #1e222d;
+            border: 1px solid #363a45;
+            border-radius: 8px;
+            padding: 14px 18px;
+            font-size: 12px;
+            color: #d1d4dc;
+            z-index: 9999;
+            pointer-events: none;
+            max-width: 380px;
+            min-width: 280px;
+            box-shadow: 0 8px 24px rgba(0,0,0,0.5);
+            line-height: 1.6;
+        }
+        .pair-tooltip h4 {
+            color: #787b86;
+            font-size: 11px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin: 8px 0 4px;
+            border-bottom: 1px solid #2a2e39;
+            padding-bottom: 3px;
+        }
+        .pair-tooltip h4:first-child { margin-top: 0; }
+        .pair-tooltip .tt-title {
+            font-size: 14px;
+            font-weight: 700;
+            color: #fff;
+            margin-bottom: 6px;
+        }
+        .pair-tooltip .tt-row {
+            display: flex;
+            justify-content: space-between;
+            gap: 12px;
+        }
+        .pair-tooltip .tt-label { color: #787b86; }
+        .pair-tooltip .tt-val { color: #fff; font-weight: 600; }
+        .pair-tooltip .tt-ok { color: #00e676; }
+        .pair-tooltip .tt-wait { color: #787b86; }
+        .pair-tooltip .tt-warn { color: #ef5350; font-weight: 600; }
     </style>
 </head>
 <body>
@@ -270,6 +311,8 @@
         <span id="statusText">Готов к сканированию</span>
         <span style="margin-left: auto" id="cycleInfo"></span>
     </div>
+
+    <div class="pair-tooltip" id="pairTooltip" style="display:none;"></div>
 
     <script>
     (function() {
@@ -863,15 +906,27 @@
             const result = {
                 trend: 'range', phase: '—',
                 lastImpSize: null, lastCorrSize: null,
-                reversal: false,
+                reversal: false, reversalReason: '',
                 s1: false, s2: false, s3: false,
                 entry: null, rr: null,
+                // Detailed data for tooltip
+                swingHighs: [], swingLows: [],
+                swingCount: 0,
+                lastImp: null, lastCorr: null,
+                levels: {},
+                slom: null,
+                h1Count: h1Candles.length,
+                m30Count: m30Candles.length,
             };
 
             if (h1Candles.length < 20) return result;
 
             const swings = findSwingPoints(h1Candles, 5);
+            result.swingCount = swings.length;
             if (swings.length < 4) return result;
+
+            result.swingHighs = swings.filter(s => s.type === 'high').slice(-3).map(s => s.price);
+            result.swingLows = swings.filter(s => s.type === 'low').slice(-3).map(s => s.price);
 
             result.trend = determineTrend(swings);
             const impulses = segmentSwings(swings, result.trend);
@@ -882,18 +937,27 @@
 
                 const imps = impulses.filter(s => s.type === 'impulse');
                 const corrs = impulses.filter(s => s.type === 'correction');
-                if (imps.length > 0) result.lastImpSize = imps[imps.length - 1].size;
-                if (corrs.length > 0) result.lastCorrSize = corrs[corrs.length - 1].size;
+                if (imps.length > 0) {
+                    result.lastImpSize = imps[imps.length - 1].size;
+                    result.lastImp = imps[imps.length - 1];
+                }
+                if (corrs.length > 0) {
+                    result.lastCorrSize = corrs[corrs.length - 1].size;
+                    result.lastCorr = corrs[corrs.length - 1];
+                }
 
                 const rev = checkReversal(impulses);
                 result.reversal = rev.reversal;
+                result.reversalReason = rev.reason;
             }
 
             if (result.trend !== 'range') {
                 const levels = constructLevels(impulses, result.trend, swings);
+                result.levels = levels;
 
                 if (m30Candles.length > 20) {
                     const slom = detectSlom(m30Candles, result.trend, levels);
+                    result.slom = slom;
                     if (slom) {
                         result.s1 = !!slom.signal1;
                         result.s2 = !!slom.signal2;
@@ -973,7 +1037,7 @@
             const rowClass = hasValid ? (e.direction === 'up' ? ' signal-long' : ' signal-short') : '';
             const clickAction = hasValid ? `onclick="toggleTradePlan('${pair}')"` : `onclick="openChart('${pair}')"`;
 
-            let html = `<tr class="clickable${rowClass}" data-pair="${pair}" ${clickAction}>
+            let html = `<tr class="clickable${rowClass}" data-pair="${pair}" ${clickAction} onmouseenter="pairMouseEnter('${pair}', event)" onmousemove="pairMouseMove(event)" onmouseleave="pairMouseLeave()">
                 <td class="val">${scanningLabel}</td>
                 <td><span class="${trendClass}">${trendIcon}</span></td>
                 <td>${verdictHtml}</td>
@@ -1232,6 +1296,123 @@
             initTableRows();
             runScannerCycle();
         };
+
+        // --- Tooltip ---
+        const tooltip = document.getElementById('pairTooltip');
+        let tooltipVisible = false;
+
+        function buildTooltipHtml(pair, r) {
+            const fp = (v) => v == null ? '—' : (v >= 10 ? v.toFixed(2) : v.toFixed(5));
+            const trendLabel = r.trend === 'up' ? 'ВОСХОДЯЩИЙ ↑' : r.trend === 'down' ? 'НИСХОДЯЩИЙ ↓' : 'БОКОВИК ↔';
+            const trendClass = r.trend === 'up' ? 'up' : r.trend === 'down' ? 'down' : 'neutral';
+
+            let html = `<div class="tt-title">${pair}</div>`;
+
+            // Step 1: Data
+            html += `<h4>Данные</h4>`;
+            html += `<div class="tt-row"><span class="tt-label">H1 свечей:</span> <span class="tt-val">${r.h1Count}</span></div>`;
+            html += `<div class="tt-row"><span class="tt-label">M30 свечей:</span> <span class="tt-val">${r.m30Count}</span></div>`;
+            html += `<div class="tt-row"><span class="tt-label">Свинг-точек:</span> <span class="tt-val">${r.swingCount}</span></div>`;
+
+            // Step 2: Trend
+            html += `<h4>Тренд H1</h4>`;
+            html += `<div><span class="${trendClass}" style="font-weight:600">${trendLabel}</span></div>`;
+            if (r.swingHighs.length > 0) {
+                html += `<div class="tt-row"><span class="tt-label">Хаи:</span> <span class="tt-val">${r.swingHighs.map(v => fp(v)).join(' → ')}</span></div>`;
+            }
+            if (r.swingLows.length > 0) {
+                html += `<div class="tt-row"><span class="tt-label">Лоу:</span> <span class="tt-val">${r.swingLows.map(v => fp(v)).join(' → ')}</span></div>`;
+            }
+
+            // Step 3: Phase
+            html += `<h4>Фаза</h4>`;
+            html += `<div><span class="tt-val">${r.phase}</span></div>`;
+            if (r.lastImp) {
+                const dir = r.lastImp.endPrice > r.lastImp.startPrice ? '+' : '';
+                html += `<div class="tt-row"><span class="tt-label">Импульс:</span> <span class="tt-val">${fp(r.lastImp.startPrice)} → ${fp(r.lastImp.endPrice)} (${dir}${fp(r.lastImp.size)})</span></div>`;
+            }
+            if (r.lastCorr) {
+                const dir = r.lastCorr.endPrice > r.lastCorr.startPrice ? '+' : '';
+                html += `<div class="tt-row"><span class="tt-label">Коррекция:</span> <span class="tt-val">${fp(r.lastCorr.startPrice)} → ${fp(r.lastCorr.endPrice)} (${dir}${fp(r.lastCorr.size)})</span></div>`;
+            }
+            html += `<div style="color:#787b86;font-size:11px">${r.reversalReason || ''}</div>`;
+            if (r.reversal) {
+                html += `<div class="tt-warn">⚠ Сигнал разворота!</div>`;
+            }
+
+            // Step 4: Levels
+            html += `<h4>Уровни H1</h4>`;
+            if (r.levels && r.levels.impulseEnd != null) {
+                html += `<div class="tt-row"><span class="tt-label">Конец импульса:</span> <span class="tt-val">${fp(r.levels.impulseEnd)}</span></div>`;
+                html += `<div class="tt-row"><span class="tt-label">Начало импульса:</span> <span class="tt-val">${fp(r.levels.impulseStart)}</span></div>`;
+                if (r.levels.target != null) {
+                    html += `<div class="tt-row"><span class="tt-label">Цель:</span> <span class="tt-val tt-ok">${fp(r.levels.target)}</span></div>`;
+                }
+            } else {
+                html += `<div class="tt-wait">Нет данных</div>`;
+            }
+
+            // Step 5: SLOM
+            html += `<h4>Слом (M30)</h4>`;
+            if (r.slom) {
+                const s1 = r.slom.signal1;
+                const s2 = r.slom.signal2;
+                const s3 = r.slom.signal3;
+                html += `<div>Сигнал 1: ${s1 ? `<span class="tt-ok">✓ ${s1.label}</span>` : '<span class="tt-wait">—</span>'}</div>`;
+                html += `<div>Сигнал 2: ${s2 ? `<span class="tt-ok">✓ ${s2.label}</span>` : '<span class="tt-wait">ожидание...</span>'}</div>`;
+                html += `<div>Сигнал 3: ${s3 ? `<span class="tt-ok">✓ ${s3.label}</span>` : '<span class="tt-wait">ожидание...</span>'}</div>`;
+            } else {
+                html += `<div class="tt-wait">Паттерн не обнаружен</div>`;
+            }
+
+            // Step 6: Entry
+            if (r.entry) {
+                html += `<h4>Вход</h4>`;
+                const dir = r.entry.direction === 'up' ? 'LONG ↑' : 'SHORT ↓';
+                const dirClass = r.entry.direction === 'up' ? 'up' : 'down';
+                html += `<div><span class="${dirClass}" style="font-weight:700">${dir}</span>`;
+                if (!r.entry.valid) html += ` <span class="tt-wait">(${r.entry.reason})</span>`;
+                html += `</div>`;
+                html += `<div class="tt-row"><span class="tt-label">Вход:</span> <span class="tt-val">${fp(r.entry.entry)}</span></div>`;
+                html += `<div class="tt-row"><span class="tt-label">Стоп:</span> <span class="down">${fp(r.entry.stop)}</span></div>`;
+                html += `<div class="tt-row"><span class="tt-label">Тейк:</span> <span class="up">${fp(r.entry.take)}</span></div>`;
+                html += `<div class="tt-row"><span class="tt-label">R:R:</span> <span class="${r.entry.valid ? 'tt-ok' : 'tt-wait'}">1:${r.entry.rr.toFixed(1)}</span></div>`;
+            }
+
+            return html;
+        }
+
+        function showTooltip(pair, event) {
+            const r = pairResults[pair];
+            if (!r) return;
+            tooltip.innerHTML = buildTooltipHtml(pair, r);
+            tooltip.style.display = 'block';
+            tooltipVisible = true;
+            positionTooltip(event);
+        }
+
+        function positionTooltip(event) {
+            if (!tooltipVisible) return;
+            const pad = 16;
+            let x = event.clientX + pad;
+            let y = event.clientY + pad;
+            const rect = tooltip.getBoundingClientRect();
+            if (x + rect.width > window.innerWidth) x = event.clientX - rect.width - pad;
+            if (y + rect.height > window.innerHeight) y = event.clientY - rect.height - pad;
+            if (x < 0) x = pad;
+            if (y < 0) y = pad;
+            tooltip.style.left = x + 'px';
+            tooltip.style.top = y + 'px';
+        }
+
+        function hideTooltip() {
+            tooltip.style.display = 'none';
+            tooltipVisible = false;
+        }
+
+        window.pairMouseEnter = function(pair, event) { showTooltip(pair, event); };
+        window.pairMouseMove = function(event) { positionTooltip(event); };
+        window.pairMouseLeave = function() { hideTooltip(); };
 
         // --- Open chart with pair ---
         window.openChart = function(pair) {
