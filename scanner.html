@@ -276,6 +276,76 @@
         .chart-btn:hover { opacity: 1; background: transparent; }
         .scan-time { cursor: pointer; }
         .scan-time:hover { color: #2962ff; }
+        .schedule-config {
+            padding: 10px 20px;
+            background: #1a1e2a;
+            border-bottom: 1px solid #2a2e39;
+            display: flex;
+            align-items: center;
+            gap: 14px;
+            flex-wrap: wrap;
+        }
+        .schedule-config label {
+            font-size: 12px;
+            color: #787b86;
+        }
+        .schedule-config input[type="number"] {
+            background: #2a2e39;
+            color: #fff;
+            border: 1px solid #363a45;
+            padding: 5px 8px;
+            border-radius: 4px;
+            font-size: 13px;
+            outline: none;
+            width: 60px;
+            text-align: center;
+        }
+        .schedule-config input[type="number"]:focus { border-color: #2962ff; }
+        .schedule-toggle {
+            position: relative;
+            width: 40px;
+            height: 22px;
+            cursor: pointer;
+        }
+        .schedule-toggle input {
+            opacity: 0;
+            width: 0;
+            height: 0;
+        }
+        .schedule-toggle .slider {
+            position: absolute;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background: #363a45;
+            border-radius: 11px;
+            transition: background 0.3s;
+        }
+        .schedule-toggle .slider::before {
+            content: '';
+            position: absolute;
+            width: 16px;
+            height: 16px;
+            left: 3px;
+            bottom: 3px;
+            background: #d1d4dc;
+            border-radius: 50%;
+            transition: transform 0.3s;
+        }
+        .schedule-toggle input:checked + .slider {
+            background: #26a69a;
+        }
+        .schedule-toggle input:checked + .slider::before {
+            transform: translateX(18px);
+        }
+        .schedule-separator {
+            color: #787b86;
+            font-size: 13px;
+            margin: 0 -6px;
+        }
+        .countdown-text {
+            color: #2962ff;
+            font-size: 12px;
+            font-weight: 600;
+        }
         .history-row td { padding: 0 12px 10px; border-bottom: 1px solid #2a2e39; }
         .history-row.hidden { display: none; }
         .history-table {
@@ -328,6 +398,25 @@
         <select id="pair2"></select>
         <select id="pair3"></select>
         <select id="pair4"></select>
+    </div>
+    <div class="schedule-config">
+        <label class="schedule-toggle" title="Включить автосканирование">
+            <input type="checkbox" id="autoScanToggle" onchange="toggleAutoScan()">
+            <span class="slider"></span>
+        </label>
+        <label>Авто</label>
+        <span class="schedule-separator">|</span>
+        <label>Окно:</label>
+        <input type="number" id="scheduleFrom" min="0" max="23" value="8" onchange="saveScheduleSettings()">
+        <span class="schedule-separator">—</span>
+        <input type="number" id="scheduleTo" min="0" max="23" value="20" onchange="saveScheduleSettings()">
+        <label>ч (МСК)</label>
+        <span class="schedule-separator">|</span>
+        <label>Интервал:</label>
+        <input type="number" id="scheduleInterval" min="1" max="24" value="1" onchange="saveScheduleSettings()">
+        <label>ч</label>
+        <span class="schedule-separator">|</span>
+        <span id="autoScanStatus" style="font-size:12px;color:#787b86;">Выкл</span>
     </div>
     <div class="table-wrapper">
         <table>
@@ -1763,6 +1852,189 @@
             initTableRows();
             runScannerCycle();
         };
+
+        // --- Auto-scan scheduling ---
+        const SCHEDULE_STORAGE_KEY = 'scannerSchedule';
+        const autoScanToggle = document.getElementById('autoScanToggle');
+        const scheduleFrom = document.getElementById('scheduleFrom');
+        const scheduleTo = document.getElementById('scheduleTo');
+        const scheduleInterval = document.getElementById('scheduleInterval');
+        const autoScanStatus = document.getElementById('autoScanStatus');
+
+        let autoScanTimerId = null;
+        let countdownTimerId = null;
+        let nextScanTime = null;
+
+        function loadScheduleSettings() {
+            try {
+                const saved = JSON.parse(localStorage.getItem(SCHEDULE_STORAGE_KEY));
+                if (saved && typeof saved === 'object') {
+                    scheduleFrom.value = saved.from ?? 8;
+                    scheduleTo.value = saved.to ?? 20;
+                    scheduleInterval.value = saved.interval ?? 1;
+                    if (saved.enabled) {
+                        autoScanToggle.checked = true;
+                        startAutoScan();
+                    }
+                }
+            } catch {}
+        }
+
+        window.saveScheduleSettings = function() {
+            const settings = {
+                from: parseInt(scheduleFrom.value) || 8,
+                to: parseInt(scheduleTo.value) || 20,
+                interval: parseInt(scheduleInterval.value) || 1,
+                enabled: autoScanToggle.checked,
+            };
+            localStorage.setItem(SCHEDULE_STORAGE_KEY, JSON.stringify(settings));
+            // Restart auto-scan if active to apply new settings
+            if (autoScanToggle.checked) {
+                stopAutoScan();
+                startAutoScan();
+            }
+        };
+
+        function getMoscowHour() {
+            const now = new Date();
+            // UTC+3 for Moscow
+            const mskOffset = 3 * 60;
+            const utcMinutes = now.getUTCHours() * 60 + now.getUTCMinutes();
+            const mskMinutes = utcMinutes + mskOffset;
+            return Math.floor(((mskMinutes % 1440) + 1440) % 1440 / 60);
+        }
+
+        function isInTimeWindow() {
+            const from = parseInt(scheduleFrom.value) || 8;
+            const to = parseInt(scheduleTo.value) || 20;
+            const hour = getMoscowHour();
+            if (from <= to) {
+                return hour >= from && hour < to;
+            } else {
+                // Overnight window, e.g. 22-06
+                return hour >= from || hour < to;
+            }
+        }
+
+        function getNextScanDelay() {
+            const intervalHours = parseInt(scheduleInterval.value) || 1;
+            return intervalHours * 60 * 60 * 1000;
+        }
+
+        function scheduleNextScan() {
+            if (!autoScanToggle.checked) return;
+
+            const delayMs = getNextScanDelay();
+            nextScanTime = Date.now() + delayMs;
+
+            autoScanTimerId = setTimeout(() => {
+                if (!autoScanToggle.checked) return;
+                if (isInTimeWindow()) {
+                    if (!scanning) {
+                        scanOnce();
+                        // Wait for scan to finish, then schedule next
+                        waitForScanEnd().then(() => scheduleNextScan());
+                    } else {
+                        scheduleNextScan();
+                    }
+                } else {
+                    updateAutoStatus('Вне окна');
+                    scheduleNextScan();
+                }
+            }, delayMs);
+
+            startCountdown();
+        }
+
+        function waitForScanEnd() {
+            return new Promise(resolve => {
+                const check = setInterval(() => {
+                    if (!scanning) {
+                        clearInterval(check);
+                        resolve();
+                    }
+                }, 1000);
+            });
+        }
+
+        function startCountdown() {
+            if (countdownTimerId) clearInterval(countdownTimerId);
+            countdownTimerId = setInterval(() => {
+                if (!nextScanTime || !autoScanToggle.checked) {
+                    clearInterval(countdownTimerId);
+                    return;
+                }
+                const remaining = Math.max(0, nextScanTime - Date.now());
+                const totalSec = Math.floor(remaining / 1000);
+                const h = Math.floor(totalSec / 3600);
+                const m = Math.floor((totalSec % 3600) / 60);
+                const s = totalSec % 60;
+                const pad = n => String(n).padStart(2, '0');
+
+                let timeStr;
+                if (h > 0) {
+                    timeStr = `${h}:${pad(m)}:${pad(s)}`;
+                } else {
+                    timeStr = `${m}:${pad(s)}`;
+                }
+
+                const inWindow = isInTimeWindow();
+                if (scanning) {
+                    updateAutoStatus('Сканирует...');
+                } else if (!inWindow) {
+                    updateAutoStatus(`Вне окна · след. ${timeStr}`);
+                } else {
+                    updateAutoStatus(`След. скан: ${timeStr}`);
+                }
+                cycleInfo.innerHTML = autoScanToggle.checked
+                    ? `<span class="countdown-text">${timeStr}</span>`
+                    : '';
+            }, 1000);
+        }
+
+        function updateAutoStatus(text) {
+            autoScanStatus.textContent = text;
+        }
+
+        function startAutoScan() {
+            updateAutoStatus('Активно');
+            // If in time window, run scan immediately
+            if (isInTimeWindow() && !scanning) {
+                scanOnce();
+                waitForScanEnd().then(() => scheduleNextScan());
+            } else {
+                if (!isInTimeWindow()) {
+                    updateAutoStatus('Вне окна');
+                }
+                scheduleNextScan();
+            }
+        }
+
+        function stopAutoScan() {
+            if (autoScanTimerId) {
+                clearTimeout(autoScanTimerId);
+                autoScanTimerId = null;
+            }
+            if (countdownTimerId) {
+                clearInterval(countdownTimerId);
+                countdownTimerId = null;
+            }
+            nextScanTime = null;
+            cycleInfo.textContent = '';
+            updateAutoStatus('Выкл');
+        }
+
+        window.toggleAutoScan = function() {
+            saveScheduleSettings();
+            if (autoScanToggle.checked) {
+                startAutoScan();
+            } else {
+                stopAutoScan();
+            }
+        };
+
+        // Load schedule settings on page load
+        loadScheduleSettings();
 
         // --- Tooltip ---
         const tooltip = document.getElementById('pairTooltip');
