@@ -1547,7 +1547,7 @@
 
         // --- Advisor Orchestration ---
 
-        async function runAdvisor() {
+        async function runAdvisor(cachedData) {
             if (!advisorActive) return;
 
             advisorState = {
@@ -1561,8 +1561,26 @@
             advisorContent.innerHTML = '<span class="neutral">Загрузка H1 и M30 данных...</span>';
 
             try {
-                // Step 1: Fetch data
-                const data = await fetchAdvisorData(currentSymbol);
+                // Step 1: Fetch data (or use cached from scanner)
+                let data;
+                if (cachedData) {
+                    data = { h1: [], m30: cachedData.m30Candles };
+                    // Reconstruct H1 from M30 is not needed — we have pre-computed analysis
+                    advisorState.m30Candles = cachedData.m30Candles;
+                    advisorState.swings = cachedData.swings;
+                    advisorState.trend = cachedData.trend;
+                    advisorState.impulses = cachedData.impulses;
+                    advisorState.levels = cachedData.levels;
+                    advisorState.slom = cachedData.slom;
+                    advisorState.entry = cachedData.entry;
+                    advisorState.log.push(`Данные из сканера: M30=${cachedData.m30Candles.length} свечей, ${cachedData.swings.length} свинг-точек`);
+
+                    // Skip to rendering
+                    renderAdvisorMarkup(advisorState);
+                    updateAdvisorPanel(advisorState);
+                    return;
+                }
+                data = await fetchAdvisorData(currentSymbol);
                 advisorState.h1Candles = data.h1;
                 advisorState.m30Candles = data.m30;
                 advisorState.log.push(`Загружено: H1=${data.h1.length} свечей, M30=${data.m30.length} свечей`);
@@ -1662,12 +1680,50 @@
         // Auto-start chart + advisor when opened from scanner with analyze=1
         const urlParams = new URLSearchParams(window.location.search);
         if (urlParams.get('analyze') === '1') {
-            (async () => {
-                await startChart();
-                if (!advisorActive) {
-                    advisorBtn.click();
+            let scannerData = null;
+            try {
+                const raw = localStorage.getItem('scannerChartData');
+                if (raw) {
+                    scannerData = JSON.parse(raw);
+                    localStorage.removeItem('scannerChartData');
                 }
-            })();
+            } catch (e) { console.warn('Failed to read scanner data:', e); }
+
+            if (scannerData && scannerData.m30Candles && scannerData.m30Candles.length > 0) {
+                // Use cached M30 candles — no API calls needed
+                const candles = scannerData.m30Candles;
+                const lineData = candles.map(c => ({ time: c.time, value: c.close }));
+                candleSeries.setData(candles);
+                lineSeries.setData(lineData);
+                const last = candles[candles.length - 1];
+                openPrice = candles[0].open;
+                currentCandle = last;
+                currentTF = '30';
+                document.querySelector('.timeframes .active')?.classList.remove('active');
+                document.querySelector('.timeframes [data-tf="30"]')?.classList.add('active');
+                updatePrice(last.close);
+                drawSupportResistance(candles);
+                buildPeriodSeparators(candles);
+                flushMarkers();
+                overlay.classList.add('hidden');
+                startPolling();
+
+                // Activate advisor with cached analysis
+                advisorActive = true;
+                advisorBtn.classList.add('active');
+                advisorPanel.classList.add('visible');
+                chart.applyOptions({ width: container.clientWidth, height: container.clientHeight });
+                runAdvisor(scannerData);
+                advisorTimer = setInterval(() => runAdvisor(), 60000);
+            } else {
+                // No cached data — fall back to normal load + advisor
+                (async () => {
+                    await startChart();
+                    if (!advisorActive) {
+                        advisorBtn.click();
+                    }
+                })();
+            }
         }
     })();
     </script>

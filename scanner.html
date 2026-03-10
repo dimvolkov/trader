@@ -1828,6 +1828,11 @@
 
         // --- Open chart with pair ---
         window.openChart = function(pair, withAnalysis) {
+            if (withAnalysis && pairChartData[pair]) {
+                try {
+                    localStorage.setItem('scannerChartData', JSON.stringify(pairChartData[pair]));
+                } catch (e) { console.warn('Failed to cache chart data:', e); }
+            }
             const analyze = withAnalysis ? '&analyze=1' : '';
             window.open(`index.html?pair=${encodeURIComponent(pair)}${analyze}`, '_blank');
         };
