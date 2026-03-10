@@ -1513,6 +1513,37 @@
             playBeep();
         }
 
+        function sendTelegramNotification(pair, result) {
+            const settings = JSON.parse(localStorage.getItem('telegramSettings') || '{}');
+            if (!settings.botToken || !settings.chatId) return;
+
+            const e = result.entry;
+            const dir = e.direction === 'up' ? 'LONG ↑' : 'SHORT ↓';
+            const fp = (v) => v >= 10 ? v.toFixed(2) : v.toFixed(5);
+
+            const text = [
+                `📊 *${pair} — ${dir}*`,
+                ``,
+                `Тренд: ${result.trend === 'up' ? 'Восходящий' : 'Нисходящий'}`,
+                `Вход: \`${fp(e.entry)}\``,
+                `Стоп: \`${fp(e.stop)}\``,
+                `Тейк: \`${fp(e.take)}\``,
+                `R:R: *1:${e.rr.toFixed(1)}*`,
+                `Размер: ${e.positionSize.toFixed(2)}`,
+                `Риск: ${e.potentialLoss.toFixed(0)}₽ → Прибыль: ${e.potentialProfit.toFixed(0)}₽`,
+            ].join('\n');
+
+            fetch(`https://api.telegram.org/bot${settings.botToken}/sendMessage`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    chat_id: settings.chatId,
+                    text,
+                    parse_mode: 'Markdown',
+                }),
+            }).catch(err => console.warn('Telegram error:', err));
+        }
+
         function playBeep() {
             try {
                 const ctx = new (window.AudioContext || window.webkitAudioContext)();
@@ -1684,6 +1715,7 @@
                     // Notify if valid entry
                     if (result.entry && result.entry.valid) {
                         sendNotification(pair, result.entry.direction, result.rr);
+                        sendTelegramNotification(pair, result);
                     }
 
                 } catch (err) {

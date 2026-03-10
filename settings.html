@@ -234,6 +234,31 @@
             <h2>Источники данных</h2>
             <div id="sourceCards"></div>
         </div>
+
+        <div class="section">
+            <h2>Уведомления / Telegram</h2>
+            <div class="source-card">
+                <div class="source-header">
+                    <span class="source-name">Telegram Bot</span>
+                    <span id="tgBadge"><span class="source-badge badge-empty">Не настроен</span></span>
+                </div>
+                <div class="source-info">
+                    Отправка сигналов сканера в Telegram.<br>
+                    <a href="https://t.me/BotFather" target="_blank">Создать бота через @BotFather &rarr;</a>
+                </div>
+                <div class="key-row" style="margin-bottom:8px">
+                    <input type="text" class="key-input" id="tgBotToken" placeholder="Bot Token (123456:ABC-DEF...)">
+                </div>
+                <div class="key-row">
+                    <input type="text" class="key-input" id="tgChatId" placeholder="Chat ID (число или @username)">
+                </div>
+                <div class="btn-row">
+                    <button class="btn btn-primary" onclick="saveTelegram()">Сохранить</button>
+                    <button class="btn btn-test" onclick="testTelegram()" id="tgTestBtn">Тест</button>
+                </div>
+                <div class="test-result" id="tgTestResult"></div>
+            </div>
+        </div>
     </div>
 
     <script>
@@ -470,6 +495,69 @@
         };
 
         renderAll();
+
+        // --- Telegram ---
+        function loadTelegramSettings() {
+            try { return JSON.parse(localStorage.getItem('telegramSettings')) || {}; } catch { return {}; }
+        }
+
+        function initTelegram() {
+            const s = loadTelegramSettings();
+            document.getElementById('tgBotToken').value = s.botToken || '';
+            document.getElementById('tgChatId').value = s.chatId || '';
+            const badge = document.getElementById('tgBadge');
+            if (s.botToken && s.chatId) {
+                badge.innerHTML = '<span class="source-badge badge-active">Настроен</span>';
+            } else {
+                badge.innerHTML = '<span class="source-badge badge-empty">Не настроен</span>';
+            }
+        }
+
+        window.saveTelegram = function() {
+            const botToken = document.getElementById('tgBotToken').value.trim();
+            const chatId = document.getElementById('tgChatId').value.trim();
+            localStorage.setItem('telegramSettings', JSON.stringify({ botToken, chatId }));
+            initTelegram();
+            document.getElementById('tgTestResult').innerHTML = '<span class="test-ok">Сохранено</span>';
+        };
+
+        window.testTelegram = function() {
+            const botToken = document.getElementById('tgBotToken').value.trim();
+            const chatId = document.getElementById('tgChatId').value.trim();
+            const resultEl = document.getElementById('tgTestResult');
+            const btn = document.getElementById('tgTestBtn');
+
+            if (!botToken || !chatId) {
+                resultEl.innerHTML = '<span class="test-fail">Заполните токен и Chat ID</span>';
+                return;
+            }
+
+            resultEl.innerHTML = '<span class="test-loading">Отправка...</span>';
+            btn.disabled = true;
+
+            fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    chat_id: chatId,
+                    text: '✅ Тестовое сообщение от Forex Scanner',
+                }),
+            })
+            .then(r => r.json())
+            .then(data => {
+                if (data.ok) {
+                    resultEl.innerHTML = '<span class="test-ok">Сообщение отправлено!</span>';
+                } else {
+                    resultEl.innerHTML = `<span class="test-fail">${data.description || 'Ошибка Telegram API'}</span>`;
+                }
+            })
+            .catch(err => {
+                resultEl.innerHTML = `<span class="test-fail">Ошибка: ${err.message}</span>`;
+            })
+            .finally(() => { btn.disabled = false; });
+        };
+
+        initTelegram();
     })();
     </script>
 </body>
