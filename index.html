@@ -1206,6 +1206,29 @@
                     size: 3,
                     text: 'ENTRY',
                 });
+
+                // --- R:R marker (offset 1 candle = 1800s from entry) ---
+                advisorMarkers.push({
+                    time: state.slom.signal2.time + 1800,
+                    position: state.entry.direction === 'up' ? 'belowBar' : 'aboveBar',
+                    color: '#ffeb3b',
+                    shape: 'square',
+                    size: 2,
+                    text: `R:R ${state.entry.rr.toFixed(1)}`,
+                });
+            }
+
+            // --- Trend marker on last swing ---
+            if (state.trend && state.swings.length > 0) {
+                const lastSwing = state.swings[state.swings.length - 1];
+                advisorMarkers.push({
+                    time: lastSwing.time,
+                    position: 'aboveBar',
+                    color: state.trend === 'up' ? '#00e676' : '#ef5350',
+                    shape: 'square',
+                    size: 2,
+                    text: state.trend === 'up' ? 'TREND ↑' : 'TREND ↓',
+                });
             }
 
             flushMarkers();
@@ -1261,6 +1284,18 @@
                 }));
             }
 
+            // --- Entry price line (yellow) ---
+            if (state.entry && state.entry.valid) {
+                advisorPriceLines.push(candleSeries.createPriceLine({
+                    price: state.entry.entry,
+                    color: '#ffeb3b',
+                    lineWidth: 2,
+                    lineStyle: LightweightCharts.LineStyle.Solid,
+                    axisLabelVisible: true,
+                    title: `▶ Entry ${state.entry.entry.toFixed(4)}`,
+                }));
+            }
+
             // --- Entry stop/take lines ---
             if (state.entry && state.entry.valid) {
                 advisorPriceLines.push(candleSeries.createPriceLine({
@@ -1279,6 +1314,124 @@
                     axisLabelVisible: true,
                     title: 'Take',
                 }));
+
+                // --- Profit/Risk zones and trajectory ---
+                const isLong = state.entry.direction === 'up';
+                const entryPrice = state.entry.entry;
+                const takePrice = state.entry.take;
+                const stopPrice = state.entry.stop;
+                const s2Time = state.slom.signal2.time;
+                const lastCandle = state.m30Candles[state.m30Candles.length - 1];
+                const endTime = lastCandle ? lastCandle.time : s2Time + 7200;
+
+                // Green profit zone (area from entry to take)
+                const profitSeries = chart.addAreaSeries({
+                    topColor: isLong ? 'rgba(0,230,118,0.12)' : 'rgba(0,230,118,0.0)',
+                    bottomColor: isLong ? 'rgba(0,230,118,0.0)' : 'rgba(0,230,118,0.12)',
+                    lineColor: 'rgba(0,0,0,0)',
+                    lineWidth: 0,
+                    lastValueVisible: false,
+                    priceLineVisible: false,
+                    crosshairMarkerVisible: false,
+                });
+                if (isLong) {
+                    profitSeries.setData([
+                        { time: s2Time, value: takePrice },
+                        { time: endTime, value: takePrice },
+                    ]);
+                } else {
+                    profitSeries.setData([
+                        { time: s2Time, value: entryPrice },
+                        { time: endTime, value: entryPrice },
+                    ]);
+                }
+                advisorSegmentSeries.push(profitSeries);
+
+                // Baseline series for profit zone bottom edge
+                const profitBase = chart.addLineSeries({
+                    color: 'rgba(0,0,0,0)',
+                    lineWidth: 0,
+                    lastValueVisible: false,
+                    priceLineVisible: false,
+                    crosshairMarkerVisible: false,
+                });
+                if (isLong) {
+                    profitBase.setData([
+                        { time: s2Time, value: entryPrice },
+                        { time: endTime, value: entryPrice },
+                    ]);
+                } else {
+                    profitBase.setData([
+                        { time: s2Time, value: takePrice },
+                        { time: endTime, value: takePrice },
+                    ]);
+                }
+                advisorSegmentSeries.push(profitBase);
+
+                // Red risk zone (area from stop to entry)
+                const riskSeries = chart.addAreaSeries({
+                    topColor: isLong ? 'rgba(239,83,80,0.0)' : 'rgba(239,83,80,0.12)',
+                    bottomColor: isLong ? 'rgba(239,83,80,0.12)' : 'rgba(239,83,80,0.0)',
+                    lineColor: 'rgba(0,0,0,0)',
+                    lineWidth: 0,
+                    lastValueVisible: false,
+                    priceLineVisible: false,
+                    crosshairMarkerVisible: false,
+                });
+                if (isLong) {
+                    riskSeries.setData([
+                        { time: s2Time, value: entryPrice },
+                        { time: endTime, value: entryPrice },
+                    ]);
+                } else {
+                    riskSeries.setData([
+                        { time: s2Time, value: stopPrice },
+                        { time: endTime, value: stopPrice },
+                    ]);
+                }
+                advisorSegmentSeries.push(riskSeries);
+
+                const riskBase = chart.addLineSeries({
+                    color: 'rgba(0,0,0,0)',
+                    lineWidth: 0,
+                    lastValueVisible: false,
+                    priceLineVisible: false,
+                    crosshairMarkerVisible: false,
+                });
+                if (isLong) {
+                    riskBase.setData([
+                        { time: s2Time, value: stopPrice },
+                        { time: endTime, value: stopPrice },
+                    ]);
+                } else {
+                    riskBase.setData([
+                        { time: s2Time, value: entryPrice },
+                        { time: endTime, value: entryPrice },
+                    ]);
+                }
+                advisorSegmentSeries.push(riskBase);
+
+                // --- Trajectory line (expected price movement) ---
+                const currentPrice = lastCandle ? lastCandle.close : entryPrice;
+                const pullbackOffset = (entryPrice - stopPrice) * 0.3;
+                const pullback = isLong ? entryPrice - pullbackOffset : entryPrice + pullbackOffset;
+                const trajColor = isLong ? 'rgba(0,230,118,0.5)' : 'rgba(239,83,80,0.5)';
+                const step = 1800; // 30 min candle
+                const trajSeries = chart.addLineSeries({
+                    color: trajColor,
+                    lineWidth: 2,
+                    lineStyle: LightweightCharts.LineStyle.Dashed,
+                    lastValueVisible: false,
+                    priceLineVisible: false,
+                    crosshairMarkerVisible: false,
+                });
+                trajSeries.setData([
+                    { time: endTime, value: currentPrice },
+                    { time: endTime + step, value: entryPrice },
+                    { time: endTime + step * 2, value: pullback },
+                    { time: endTime + step * 5, value: takePrice },
+                ]);
+                advisorSegmentSeries.push(trajSeries);
             }
         }
 
