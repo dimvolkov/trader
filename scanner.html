@@ -255,6 +255,41 @@
         .pair-tooltip .tt-ok { color: #00e676; }
         .pair-tooltip .tt-wait { color: #787b86; }
         .pair-tooltip .tt-warn { color: #ef5350; font-weight: 600; }
+        .chart-btn {
+            background: transparent;
+            border: none;
+            padding: 2px 6px;
+            font-size: 16px;
+            cursor: pointer;
+            opacity: 0.6;
+            transition: opacity 0.2s;
+            line-height: 1;
+        }
+        .chart-btn:hover { opacity: 1; background: transparent; }
+        .scan-time { cursor: pointer; }
+        .scan-time:hover { color: #2962ff; }
+        .history-row td { padding: 0 12px 10px; border-bottom: 1px solid #2a2e39; }
+        .history-row.hidden { display: none; }
+        .history-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 12px;
+            margin: 6px 0;
+        }
+        .history-table th {
+            background: #1a1e2a;
+            color: #787b86;
+            font-weight: 600;
+            padding: 6px 10px;
+            text-align: left;
+            position: static;
+        }
+        .history-table td {
+            padding: 5px 10px;
+            border-bottom: 1px solid #1e222d;
+            color: #d1d4dc;
+        }
+        .history-table tr.history-valid { background: rgba(38, 166, 154, 0.08); }
     </style>
 </head>
 <body>
@@ -300,6 +335,8 @@
                     <th>R:R</th>
                     <th>Размер позиции</th>
                     <th>Риск / Прибыль</th>
+                    <th>Время</th>
+                    <th></th>
                 </tr>
             </thead>
             <tbody id="scannerBody">
@@ -365,6 +402,23 @@
         let scanning = false;
         let scanAbort = false;
         let notifiedEntries = new Set();
+        const HISTORY_STORAGE_KEY = 'scannerHistory';
+        let scanHistory = {};
+
+        function loadHistory() {
+            try {
+                const saved = JSON.parse(localStorage.getItem(HISTORY_STORAGE_KEY));
+                if (saved && typeof saved === 'object') scanHistory = saved;
+            } catch {}
+        }
+
+        function saveHistory() {
+            try {
+                localStorage.setItem(HISTORY_STORAGE_KEY, JSON.stringify(scanHistory));
+            } catch {}
+        }
+
+        loadHistory();
 
         // --- DOM refs ---
         const scanBtn = document.getElementById('scanBtn');
@@ -1048,12 +1102,17 @@
                 <td>${rrHtml}</td>
                 <td>${sizeHtml}</td>
                 <td>${riskProfitHtml}</td>
+                <td class="neutral scan-time" onclick="event.stopPropagation(); toggleHistory('${pair}')" title="Показать историю">${result.scanTime ? new Date(result.scanTime).toLocaleTimeString() : '—'}</td>
+                <td><button class="chart-btn" onclick="event.stopPropagation(); openChart('${pair}')" title="Открыть график">📈</button></td>
             </tr>`;
+
+            // Add hidden history row
+            html += renderHistoryRow(pair);
 
             // Add hidden trade plan row for valid entries
             if (hasValid) {
                 html += `<tr class="trade-plan-row hidden" id="plan-${pair.replace('/', '-')}">
-                    <td colspan="10">
+                    <td colspan="12">
                         <div class="trade-plan">
                             <div class="trade-plan-item">
                                 <span class="label">Направление</span>
@@ -1108,6 +1167,34 @@
             const planRow = document.getElementById('plan-' + pair.replace('/', '-'));
             if (planRow) {
                 planRow.classList.toggle('hidden');
+            }
+        };
+
+        function renderHistoryRow(pair) {
+            const id = 'history-' + pair.replace('/', '-');
+            const entries = scanHistory[pair];
+            if (!entries || entries.length === 0) {
+                return `<tr class="history-row hidden" id="${id}"><td colspan="12"><span class="neutral">Нет истории</span></td></tr>`;
+            }
+            const last10 = entries.slice(-10).reverse();
+            let tableHtml = `<table class="history-table"><thead><tr><th>Время</th><th>Тренд</th><th>Вердикт</th><th>R:R</th></tr></thead><tbody>`;
+            for (const h of last10) {
+                const trendIcon = h.trend === 'up' ? '↑' : h.trend === 'down' ? '↓' : '↔';
+                const trendClass = h.trend === 'up' ? 'up' : h.trend === 'down' ? 'down' : 'neutral';
+                const verdict = h.valid ? '<span class="verdict-ok">Вход</span>' : `<span class="neutral">${h.verdict || 'Нет входа'}</span>`;
+                const rr = h.rr ? `1:${h.rr.toFixed(1)}` : '—';
+                const rowClass = h.valid ? ' class="history-valid"' : '';
+                const time = new Date(h.time).toLocaleTimeString();
+                tableHtml += `<tr${rowClass}><td>${time}</td><td><span class="${trendClass}">${trendIcon}</span></td><td>${verdict}</td><td>${rr}</td></tr>`;
+            }
+            tableHtml += `</tbody></table>`;
+            return `<tr class="history-row hidden" id="${id}"><td colspan="12">${tableHtml}</td></tr>`;
+        }
+
+        window.toggleHistory = function(pair) {
+            const histRow = document.getElementById('history-' + pair.replace('/', '-'));
+            if (histRow) {
+                histRow.classList.toggle('hidden');
             }
         };
 
@@ -1167,6 +1254,22 @@
 
         function initTableRows() {
             const pairs = getWatchlist();
+            // Restore last results from history if not already in memory
+            for (const pair of pairs) {
+                if (!pairResults[pair] && scanHistory[pair] && scanHistory[pair].length > 0) {
+                    const lastEntry = scanHistory[pair][scanHistory[pair].length - 1];
+                    pairResults[pair] = {
+                        trend: lastEntry.trend || 'range', phase: '—',
+                        lastImpSize: null, lastCorrSize: null,
+                        reversal: false, s1: false, s2: false, s3: false,
+                        entry: null, rr: lastEntry.rr || null,
+                        scanTime: lastEntry.time,
+                        swingHighs: [], swingLows: [], swingCount: 0,
+                        lastImp: null, lastCorr: null, levels: {}, slom: null,
+                        h1Count: 0, m30Count: 0,
+                    };
+                }
+            }
             scannerBody.innerHTML = pairs.map(pair => {
                 const result = pairResults[pair] || {
                     trend: 'range', phase: '—',
@@ -1182,8 +1285,11 @@
             const mainRow = scannerBody.querySelector(`tr[data-pair="${pair}"]`);
             if (!mainRow) return;
             const planId = 'plan-' + pair.replace('/', '-');
+            const histId = 'history-' + pair.replace('/', '-');
             const existingPlan = document.getElementById(planId);
+            const existingHist = document.getElementById(histId);
             if (existingPlan) existingPlan.remove();
+            if (existingHist) existingHist.remove();
             mainRow.outerHTML = renderRow(pair, result, isScanning);
         }
 
@@ -1243,7 +1349,22 @@
                         hasEntry: !!result.entry, rr: result.rr,
                         entryDetail: result.entry ? { valid: result.entry.valid, direction: result.entry.direction, reason: result.entry.reason } : null
                     }));
+                    result.scanTime = new Date().toISOString();
                     pairResults[pair] = result;
+
+                    // Save to history
+                    if (!scanHistory[pair]) scanHistory[pair] = [];
+                    const e2 = result.entry;
+                    scanHistory[pair].push({
+                        time: result.scanTime,
+                        trend: result.trend,
+                        verdict: e2 ? (e2.valid ? 'Вход возможен' : e2.reason) : (result.trend === 'range' ? 'Нет тренда' : 'Нет сигнала'),
+                        valid: !!(e2 && e2.valid),
+                        entry: e2 ? e2.entry : null,
+                        rr: result.rr,
+                    });
+                    if (scanHistory[pair].length > 20) scanHistory[pair] = scanHistory[pair].slice(-20);
+                    saveHistory();
 
                     // Update row
                     updateRowForPair(pair, result, false);
