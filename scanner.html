@@ -413,6 +413,7 @@
         let notifiedEntries = new Set();
         const HISTORY_STORAGE_KEY = 'scannerHistory';
         let scanHistory = {};
+        const CHARTDATA_STORAGE_KEY = 'scannerChartData_v1';
 
         function loadHistory() {
             try {
@@ -425,6 +426,20 @@
             try {
                 localStorage.setItem(HISTORY_STORAGE_KEY, JSON.stringify(scanHistory));
             } catch {}
+        }
+
+        function loadChartDataCache() {
+            try {
+                const saved = JSON.parse(localStorage.getItem(CHARTDATA_STORAGE_KEY));
+                if (saved && typeof saved === 'object') return saved;
+            } catch {}
+            return {};
+        }
+
+        function saveChartDataCache() {
+            try {
+                localStorage.setItem(CHARTDATA_STORAGE_KEY, JSON.stringify(pairChartData));
+            } catch (e) { console.warn('Failed to save chart data cache:', e); }
         }
 
         loadHistory();
@@ -1526,23 +1541,27 @@
 
         // --- Scanner cycle ---
         const pairResults = {};
-        const pairChartData = {};
+        const pairChartData = loadChartDataCache();
         const miniCharts = {};
 
         function initTableRows() {
             const pairs = getWatchlist();
-            // Restore last results from history if not already in memory
+            // Restore last results from history + cached chart data
             for (const pair of pairs) {
                 if (!pairResults[pair] && scanHistory[pair] && scanHistory[pair].length > 0) {
                     const lastEntry = scanHistory[pair][scanHistory[pair].length - 1];
+                    const cached = pairChartData[pair];
                     pairResults[pair] = {
                         trend: lastEntry.trend || 'range', phase: '—',
                         lastImpSize: null, lastCorrSize: null,
                         reversal: false, s1: false, s2: false, s3: false,
-                        entry: null, rr: lastEntry.rr || null,
+                        entry: cached ? cached.entry : null,
+                        rr: lastEntry.rr || null,
                         scanTime: lastEntry.time,
                         swingHighs: [], swingLows: [], swingCount: 0,
-                        lastImp: null, lastCorr: null, levels: {}, slom: null,
+                        lastImp: null, lastCorr: null,
+                        levels: cached ? cached.levels : {},
+                        slom: cached ? cached.slom : null,
                         h1Count: 0, m30Count: 0,
                     };
                 }
@@ -1641,6 +1660,8 @@
                             slom: result.slom,
                             entry: result.entry,
                         };
+                    } else {
+                        delete pairChartData[pair];
                     }
 
                     // Save to history
@@ -1683,6 +1704,8 @@
             }
 
             if (scanAbort) return;
+
+            saveChartDataCache();
 
             const elapsed = ((Date.now() - cycleStart) / 1000).toFixed(0);
             const finishTime = new Date().toLocaleTimeString();
