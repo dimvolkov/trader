@@ -162,6 +162,14 @@
             border-bottom: 1px solid #2a2e39;
         }
         .trade-plan-row.hidden { display: none; }
+        .mini-chart-container {
+            margin-top: 12px;
+            height: 250px;
+            width: 100%;
+            background: #131722;
+            border-radius: 6px;
+            border: 1px solid #2a2e39;
+        }
         tr.signal-long {
             animation: pulseGreen 2s ease-in-out 3;
         }
@@ -351,6 +359,7 @@
 
     <div class="pair-tooltip" id="pairTooltip" style="display:none;"></div>
 
+    <script src="lightweight-charts.js"></script>
     <script>
     (function() {
         // --- Data source configs ---
@@ -1028,6 +1037,9 @@
                 }
             }
 
+            result.swings = swings;
+            result.impulses = impulses;
+
             return result;
         }
 
@@ -1155,6 +1167,7 @@
                                 <span class="value">${(RISK_PCT * 100).toFixed(0)}% = ${formatMoney(MAX_RISK)}</span>
                             </div>
                         </div>
+                        <div id="minichart-${pair.replace('/', '-')}" class="mini-chart-container"></div>
                     </td>
                 </tr>`;
             }
@@ -1162,11 +1175,273 @@
             return html;
         }
 
+        // --- Render mini chart in trade plan ---
+        function renderMiniChart(pair) {
+            const data = pairChartData[pair];
+            if (!data) return;
+
+            const containerId = 'minichart-' + pair.replace('/', '-');
+            const container = document.getElementById(containerId);
+            if (!container) return;
+
+            const chart = LightweightCharts.createChart(container, {
+                width: container.clientWidth,
+                height: 250,
+                layout: { background: { color: '#131722' }, textColor: '#d1d4dc' },
+                grid: { vertLines: { color: '#1e222d' }, horzLines: { color: '#1e222d' } },
+                crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
+                rightPriceScale: { borderColor: '#2a2e39' },
+                timeScale: { borderColor: '#2a2e39', timeVisible: true },
+            });
+
+            // Candlestick series
+            const candleSeries = chart.addCandlestickSeries({
+                upColor: '#26a69a', downColor: '#ef5350',
+                borderUpColor: '#26a69a', borderDownColor: '#ef5350',
+                wickUpColor: '#26a69a', wickDownColor: '#ef5350',
+            });
+            candleSeries.setData(data.m30Candles);
+
+            // Build M30 time index for snapping H1 swing times
+            const m30Times = data.m30Candles.map(c => c.time);
+            function snapToM30(t) {
+                let best = m30Times[0], bestDiff = Math.abs(t - m30Times[0]);
+                for (const mt of m30Times) {
+                    const diff = Math.abs(t - mt);
+                    if (diff < bestDiff) { best = mt; bestDiff = diff; }
+                }
+                return best;
+            }
+
+            const markers = [];
+
+            // Swing markers
+            for (const sw of data.swings) {
+                const fp = sw.price >= 10 ? sw.price.toFixed(2) : sw.price.toFixed(5);
+                markers.push({
+                    time: snapToM30(sw.time),
+                    position: sw.type === 'high' ? 'aboveBar' : 'belowBar',
+                    color: '#ffeb3b',
+                    shape: sw.type === 'high' ? 'arrowDown' : 'arrowUp',
+                    size: 1,
+                    text: fp,
+                });
+            }
+
+            // SLOM markers
+            if (data.slom) {
+                if (data.slom.signal1) {
+                    markers.push({
+                        time: data.slom.signal1.time,
+                        position: 'belowBar', color: '#2962ff', shape: 'circle', size: 2, text: 'S1',
+                    });
+                }
+                if (data.slom.signal2) {
+                    markers.push({
+                        time: data.slom.signal2.time,
+                        position: 'belowBar', color: '#ff9800', shape: 'circle', size: 2, text: 'S2',
+                    });
+                }
+                if (data.slom.signal3) {
+                    markers.push({
+                        time: data.slom.signal3.time,
+                        position: 'belowBar', color: '#00e676', shape: 'circle', size: 2, text: 'S3',
+                    });
+                }
+            }
+
+            // Entry + R:R markers
+            if (data.entry && data.entry.valid && data.slom && data.slom.signal2) {
+                markers.push({
+                    time: data.slom.signal2.time,
+                    position: data.entry.direction === 'up' ? 'belowBar' : 'aboveBar',
+                    color: '#00e676',
+                    shape: data.entry.direction === 'up' ? 'arrowUp' : 'arrowDown',
+                    size: 3, text: 'ENTRY',
+                });
+                markers.push({
+                    time: data.slom.signal2.time + 1800,
+                    position: data.entry.direction === 'up' ? 'belowBar' : 'aboveBar',
+                    color: '#ffeb3b', shape: 'square', size: 2,
+                    text: `R:R ${data.entry.rr.toFixed(1)}`,
+                });
+            }
+
+            // Trend marker on last swing
+            if (data.trend && data.swings.length > 0) {
+                const lastSwing = data.swings[data.swings.length - 1];
+                markers.push({
+                    time: snapToM30(lastSwing.time),
+                    position: 'aboveBar',
+                    color: data.trend === 'up' ? '#00e676' : '#ef5350',
+                    shape: 'square', size: 2,
+                    text: data.trend === 'up' ? 'TREND ↑' : 'TREND ↓',
+                });
+            }
+
+            // Sort markers by time (required by lightweight-charts)
+            markers.sort((a, b) => a.time - b.time);
+            candleSeries.setMarkers(markers);
+
+            // Impulse/correction line segments
+            const segmentSeries = [];
+            for (const seg of data.impulses) {
+                const isImpulse = seg.type === 'impulse';
+                const series = chart.addLineSeries({
+                    color: isImpulse ? '#2962ff' : '#ff9800',
+                    lineWidth: isImpulse ? 3 : 2,
+                    lineStyle: isImpulse ? LightweightCharts.LineStyle.Solid : LightweightCharts.LineStyle.Dashed,
+                    lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false,
+                });
+                series.setData([
+                    { time: snapToM30(seg.startTime), value: seg.startPrice },
+                    { time: snapToM30(seg.endTime), value: seg.endPrice },
+                ]);
+                segmentSeries.push(series);
+            }
+
+            // H1 Levels as price lines
+            const levels = data.levels;
+            if (levels.impulseEnd != null) {
+                candleSeries.createPriceLine({
+                    price: levels.impulseEnd, color: '#e040fb', lineWidth: 2,
+                    lineStyle: LightweightCharts.LineStyle.Solid, axisLabelVisible: true, title: 'Конец имп.',
+                });
+            }
+            if (levels.impulseStart != null) {
+                candleSeries.createPriceLine({
+                    price: levels.impulseStart, color: '#e040fb', lineWidth: 1,
+                    lineStyle: LightweightCharts.LineStyle.Solid, axisLabelVisible: true, title: 'Начало имп.',
+                });
+            }
+            if (levels.target != null) {
+                candleSeries.createPriceLine({
+                    price: levels.target, color: '#00e676', lineWidth: 2,
+                    lineStyle: LightweightCharts.LineStyle.Dotted, axisLabelVisible: true, title: 'Цель',
+                });
+            }
+
+            // Entry/stop/take price lines + zones + trajectory
+            if (data.entry && data.entry.valid && data.slom && data.slom.signal2) {
+                candleSeries.createPriceLine({
+                    price: data.entry.entry, color: '#ffeb3b', lineWidth: 2,
+                    lineStyle: LightweightCharts.LineStyle.Solid, axisLabelVisible: true,
+                    title: `▶ Entry ${data.entry.entry.toFixed(4)}`,
+                });
+                candleSeries.createPriceLine({
+                    price: data.entry.stop, color: '#ef5350', lineWidth: 1,
+                    lineStyle: LightweightCharts.LineStyle.Dashed, axisLabelVisible: true, title: 'Stop',
+                });
+                candleSeries.createPriceLine({
+                    price: data.entry.take, color: '#00e676', lineWidth: 1,
+                    lineStyle: LightweightCharts.LineStyle.Dashed, axisLabelVisible: true, title: 'Take',
+                });
+
+                const isLong = data.entry.direction === 'up';
+                const entryPrice = data.entry.entry;
+                const takePrice = data.entry.take;
+                const stopPrice = data.entry.stop;
+                const s2Time = data.slom.signal2.time;
+                const lastCandle = data.m30Candles[data.m30Candles.length - 1];
+                const endTime = lastCandle ? lastCandle.time : s2Time + 7200;
+
+                // Profit zone
+                const profitSeries = chart.addAreaSeries({
+                    topColor: isLong ? 'rgba(0,230,118,0.12)' : 'rgba(0,230,118,0.0)',
+                    bottomColor: isLong ? 'rgba(0,230,118,0.0)' : 'rgba(0,230,118,0.12)',
+                    lineColor: 'rgba(0,0,0,0)', lineWidth: 0,
+                    lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false,
+                });
+                profitSeries.setData([
+                    { time: s2Time, value: isLong ? takePrice : entryPrice },
+                    { time: endTime, value: isLong ? takePrice : entryPrice },
+                ]);
+                segmentSeries.push(profitSeries);
+
+                const profitBase = chart.addLineSeries({
+                    color: 'rgba(0,0,0,0)', lineWidth: 0,
+                    lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false,
+                });
+                profitBase.setData([
+                    { time: s2Time, value: isLong ? entryPrice : takePrice },
+                    { time: endTime, value: isLong ? entryPrice : takePrice },
+                ]);
+                segmentSeries.push(profitBase);
+
+                // Risk zone
+                const riskSeries = chart.addAreaSeries({
+                    topColor: isLong ? 'rgba(239,83,80,0.0)' : 'rgba(239,83,80,0.12)',
+                    bottomColor: isLong ? 'rgba(239,83,80,0.12)' : 'rgba(239,83,80,0.0)',
+                    lineColor: 'rgba(0,0,0,0)', lineWidth: 0,
+                    lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false,
+                });
+                riskSeries.setData([
+                    { time: s2Time, value: isLong ? entryPrice : stopPrice },
+                    { time: endTime, value: isLong ? entryPrice : stopPrice },
+                ]);
+                segmentSeries.push(riskSeries);
+
+                const riskBase = chart.addLineSeries({
+                    color: 'rgba(0,0,0,0)', lineWidth: 0,
+                    lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false,
+                });
+                riskBase.setData([
+                    { time: s2Time, value: isLong ? stopPrice : entryPrice },
+                    { time: endTime, value: isLong ? stopPrice : entryPrice },
+                ]);
+                segmentSeries.push(riskBase);
+
+                // Trajectory line
+                const currentPrice = lastCandle ? lastCandle.close : entryPrice;
+                const pullbackOffset = (entryPrice - stopPrice) * 0.3;
+                const pullback = isLong ? entryPrice - pullbackOffset : entryPrice + pullbackOffset;
+                const trajColor = isLong ? 'rgba(0,230,118,0.5)' : 'rgba(239,83,80,0.5)';
+                const step = 1800;
+                const trajSeries = chart.addLineSeries({
+                    color: trajColor, lineWidth: 2,
+                    lineStyle: LightweightCharts.LineStyle.Dashed,
+                    lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false,
+                });
+                trajSeries.setData([
+                    { time: endTime, value: currentPrice },
+                    { time: endTime + step, value: entryPrice },
+                    { time: endTime + step * 2, value: pullback },
+                    { time: endTime + step * 5, value: takePrice },
+                ]);
+                segmentSeries.push(trajSeries);
+            }
+
+            chart.timeScale().fitContent();
+
+            // Responsive resize
+            const ro = new ResizeObserver(entries => {
+                for (const e of entries) {
+                    chart.applyOptions({ width: e.contentRect.width });
+                }
+            });
+            ro.observe(container);
+
+            miniCharts[pair] = { chart, resizeObserver: ro };
+        }
+
+        function destroyMiniChart(pair) {
+            if (miniCharts[pair]) {
+                miniCharts[pair].resizeObserver.disconnect();
+                miniCharts[pair].chart.remove();
+                delete miniCharts[pair];
+            }
+        }
+
         // --- Toggle trade plan visibility ---
         window.toggleTradePlan = function(pair) {
             const planRow = document.getElementById('plan-' + pair.replace('/', '-'));
             if (planRow) {
-                planRow.classList.toggle('hidden');
+                const isHidden = planRow.classList.toggle('hidden');
+                if (isHidden) {
+                    destroyMiniChart(pair);
+                } else {
+                    setTimeout(() => renderMiniChart(pair), 50);
+                }
             }
         };
 
@@ -1251,6 +1526,8 @@
 
         // --- Scanner cycle ---
         const pairResults = {};
+        const pairChartData = {};
+        const miniCharts = {};
 
         function initTableRows() {
             const pairs = getWatchlist();
@@ -1284,6 +1561,7 @@
         function updateRowForPair(pair, result, isScanning) {
             const mainRow = scannerBody.querySelector(`tr[data-pair="${pair}"]`);
             if (!mainRow) return;
+            destroyMiniChart(pair);
             const planId = 'plan-' + pair.replace('/', '-');
             const histId = 'history-' + pair.replace('/', '-');
             const existingPlan = document.getElementById(planId);
@@ -1351,6 +1629,19 @@
                     }));
                     result.scanTime = new Date().toISOString();
                     pairResults[pair] = result;
+
+                    // Cache chart data for mini chart
+                    if (result.entry && result.entry.valid && result.swings) {
+                        pairChartData[pair] = {
+                            m30Candles: m30,
+                            swings: result.swings,
+                            impulses: result.impulses,
+                            trend: result.trend,
+                            levels: result.levels,
+                            slom: result.slom,
+                            entry: result.entry,
+                        };
+                    }
 
                     // Save to history
                     if (!scanHistory[pair]) scanHistory[pair] = [];
