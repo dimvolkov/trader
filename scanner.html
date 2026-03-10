@@ -1610,6 +1610,8 @@
             const dir = e.direction === 'up' ? 'LONG ↑' : 'SHORT ↓';
             const fp = (v) => v >= 10 ? v.toFixed(2) : v.toFixed(5);
 
+            const chartUrl = `https://trader.kachestvobiz-ai.ru/index.html?pair=${encodeURIComponent(pair)}&analyze=1`;
+
             const text = [
                 `📊 *${pair} — ${dir}*`,
                 ``,
@@ -1620,6 +1622,8 @@
                 `R:R: *1:${e.rr.toFixed(1)}*`,
                 `Размер: ${e.positionSize.toFixed(2)}`,
                 `Риск: ${e.potentialLoss.toFixed(0)}₽ → Прибыль: ${e.potentialProfit.toFixed(0)}₽`,
+                ``,
+                `[📈 Открыть график](${chartUrl})`,
             ].join('\n');
 
             fetch(`https://api.telegram.org/bot${settings.botToken}/sendMessage`, {
