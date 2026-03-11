@@ -368,6 +368,51 @@
             color: #d1d4dc;
         }
         .history-table tr.history-valid { background: rgba(38, 166, 154, 0.08); }
+        .scan-log-panel {
+            background: #1a1e2a;
+            border-top: 1px solid #2a2e39;
+            max-height: 0;
+            overflow: hidden;
+            transition: max-height 0.3s ease;
+        }
+        .scan-log-panel.open { max-height: 300px; overflow-y: auto; }
+        .scan-log-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 6px 20px;
+            background: #1e222d;
+            border-top: 1px solid #2a2e39;
+            cursor: pointer;
+            user-select: none;
+        }
+        .scan-log-header:hover { background: #252930; }
+        .scan-log-header span { font-size: 12px; color: #787b86; }
+        .scan-log-header .log-badge {
+            background: #ef5350;
+            color: #fff;
+            font-size: 10px;
+            padding: 1px 6px;
+            border-radius: 8px;
+            margin-left: 8px;
+            display: none;
+        }
+        .scan-log-entry {
+            padding: 4px 20px;
+            font-size: 12px;
+            border-bottom: 1px solid #1e222d;
+            display: flex;
+            gap: 10px;
+            align-items: baseline;
+        }
+        .scan-log-entry .log-time { color: #787b86; white-space: nowrap; min-width: 60px; }
+        .scan-log-entry .log-pair { color: #2962ff; font-weight: 600; min-width: 80px; }
+        .scan-log-entry .log-msg { color: #d1d4dc; }
+        .scan-log-entry.log-success .log-msg { color: #00e676; }
+        .scan-log-entry.log-warn .log-msg { color: #ff9800; }
+        .scan-log-entry.log-error .log-msg { color: #ef5350; }
+        .scan-log-entry.log-info .log-msg { color: #787b86; }
+        .scan-log-entry.log-tg .log-msg { color: #29b6f6; }
     </style>
 </head>
 <body>
@@ -439,6 +484,13 @@
             <tbody id="scannerBody">
             </tbody>
         </table>
+    </div>
+    <div class="scan-log-header" onclick="toggleScanLog()">
+        <span>&#9660; Лог сканирования <span class="log-badge" id="logBadge">0</span></span>
+        <span id="logToggleHint" style="font-size:11px;color:#363a45;">нажмите чтобы открыть</span>
+    </div>
+    <div class="scan-log-panel" id="scanLogPanel">
+        <div id="scanLogContent"></div>
     </div>
     <div class="status-bar">
         <div class="status-dot" id="statusDot"></div>
@@ -1577,6 +1629,42 @@
             }
         };
 
+        // --- Scan Log ---
+        const scanLogContent = document.getElementById('scanLogContent');
+        const scanLogPanel = document.getElementById('scanLogPanel');
+        const logBadge = document.getElementById('logBadge');
+        let logWarnCount = 0;
+
+        window.toggleScanLog = function() {
+            scanLogPanel.classList.toggle('open');
+            const hint = document.getElementById('logToggleHint');
+            hint.textContent = scanLogPanel.classList.contains('open') ? 'нажмите чтобы закрыть' : 'нажмите чтобы открыть';
+            if (scanLogPanel.classList.contains('open')) {
+                logWarnCount = 0;
+                logBadge.style.display = 'none';
+            }
+        };
+
+        function addScanLog(pair, message, type) {
+            // type: 'info', 'success', 'warn', 'error', 'tg'
+            const now = new Date();
+            const time = now.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+            const entry = document.createElement('div');
+            entry.className = `scan-log-entry log-${type || 'info'}`;
+            entry.innerHTML = `<span class="log-time">${time}</span><span class="log-pair">${pair || '—'}</span><span class="log-msg">${message}</span>`;
+            scanLogContent.prepend(entry);
+            // Keep max 100 entries
+            while (scanLogContent.children.length > 100) {
+                scanLogContent.removeChild(scanLogContent.lastChild);
+            }
+            // Badge for warnings/errors when panel is closed
+            if ((type === 'warn' || type === 'error') && !scanLogPanel.classList.contains('open')) {
+                logWarnCount++;
+                logBadge.textContent = logWarnCount;
+                logBadge.style.display = 'inline';
+            }
+        }
+
         // --- Notifications ---
         function requestNotificationPermission() {
             if ('Notification' in window && Notification.permission === 'default') {
@@ -1604,7 +1692,10 @@
 
         function sendTelegramNotification(pair, result) {
             const settings = JSON.parse(localStorage.getItem('telegramSettings') || '{}');
-            if (!settings.botToken || !settings.chatId) return;
+            if (!settings.botToken || !settings.chatId) {
+                addScanLog(pair, 'Telegram: не настроен botToken или chatId — уведомление не отправлено', 'error');
+                return;
+            }
 
             const e = result.entry;
             const dir = e.direction === 'up' ? 'LONG ↑' : 'SHORT ↓';
@@ -1634,7 +1725,19 @@
                     text,
                     parse_mode: 'Markdown',
                 }),
-            }).catch(err => console.warn('Telegram error:', err));
+            }).then(resp => {
+                if (resp.ok) {
+                    addScanLog(pair, `Telegram: уведомление отправлено (${dir})`, 'tg');
+                } else {
+                    resp.json().then(data => {
+                        addScanLog(pair, `Telegram ошибка ${resp.status}: ${data.description || 'Unknown'}`, 'error');
+                    }).catch(() => {
+                        addScanLog(pair, `Telegram ошибка: HTTP ${resp.status}`, 'error');
+                    });
+                }
+            }).catch(err => {
+                addScanLog(pair, `Telegram сбой: ${err.message}`, 'error');
+            });
         }
 
         function playBeep() {
@@ -1723,8 +1826,11 @@
             const cycleStart = Date.now();
             notifiedEntries.clear();
 
+            addScanLog('', `Сканирование начато: ${pairs.length} пар [${DATA_SOURCES[source].label}]`, 'info');
+
             // Check API key
             if (!getApiKey(source)) {
+                addScanLog('', `Ошибка: не указан API ключ для ${DATA_SOURCES[source].label}`, 'error');
                 statusText.textContent = `Ошибка: не указан API ключ для ${DATA_SOURCES[source].label}`;
                 scanning = false;
                 scanBtn.disabled = false;
@@ -1805,14 +1911,22 @@
                     // Update row
                     updateRowForPair(pair, result, false);
 
-                    // Notify if valid entry
+                    // Log result and notify
                     if (result.entry && result.entry.valid) {
+                        addScanLog(pair, `Сигнал найден! ${result.entry.direction === 'up' ? 'LONG' : 'SHORT'}, R:R = ${result.rr.toFixed(2)}`, 'success');
                         sendNotification(pair, result.entry.direction, result.rr);
                         sendTelegramNotification(pair, result);
+                    } else if (result.entry && !result.entry.valid) {
+                        addScanLog(pair, `Сигнал есть, но ${result.entry.reason} — уведомление не отправлено`, 'warn');
+                    } else if (result.trend === 'range') {
+                        addScanLog(pair, 'Нет тренда (range)', 'info');
+                    } else {
+                        addScanLog(pair, `Тренд: ${result.trend}, но нет сигнала входа`, 'info');
                     }
 
                 } catch (err) {
                     console.warn(`Scan error for ${pair}:`, err);
+                    addScanLog(pair, `Ошибка: ${err.message}`, 'error');
                     statusText.textContent = `Ошибка ${pair}: ${err.message}`;
                     updateRowForPair(pair, pairResults[pair] || {
                         trend: 'range', phase: '—',
@@ -1834,6 +1948,7 @@
 
             const elapsed = ((Date.now() - cycleStart) / 1000).toFixed(0);
             const finishTime = new Date().toLocaleTimeString();
+            addScanLog('', `Сканирование завершено за ${elapsed}с`, 'info');
             statusText.textContent = `Анализ завершён в ${finishTime} (${elapsed}с)`;
             cycleInfo.textContent = '';
             scanning = false;
@@ -1935,13 +2050,16 @@
                 if (!autoScanToggle.checked) return;
                 if (isInTimeWindow()) {
                     if (!scanning) {
+                        addScanLog('', 'Авто-скан: запуск по расписанию', 'info');
                         scanOnce();
                         // Wait for scan to finish, then schedule next
                         waitForScanEnd().then(() => scheduleNextScan());
                     } else {
+                        addScanLog('', 'Авто-скан: пропуск — сканирование уже идёт', 'warn');
                         scheduleNextScan();
                     }
                 } else {
+                    addScanLog('', 'Авто-скан: пропуск — вне временного окна', 'info');
                     updateAutoStatus('Вне окна');
                     scheduleNextScan();
                 }
