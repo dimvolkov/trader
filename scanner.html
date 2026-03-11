@@ -904,7 +904,8 @@
 
         // --- Twelve Data ---
         async function fetchTwelveData(symbol, interval) {
-            const url = `https://api.twelvedata.com/time_series?symbol=${symbol}&interval=${interval}&outputsize=500&apikey=${getApiKey('twelvedata')}`;
+            const size = interval === '1h' ? 200 : 150;
+            const url = `https://api.twelvedata.com/time_series?symbol=${symbol}&interval=${interval}&outputsize=${size}&apikey=${getApiKey('twelvedata')}`;
             const res = await fetchWithTimeout(url);
             const data = await res.json();
             if (data.status === 'ok' && data.values) {
@@ -1119,18 +1120,18 @@
                 try {
                     return await fetchFn(symbol, interval);
                 } catch (err) {
-                    if (err.name === 'AbortError') {
-                        if (attempt < retries) {
-                            statusText.textContent = `Таймаут — повтор (попытка ${attempt + 2}/${retries + 1})...`;
-                            await delay(3000);
+                    if (attempt < retries) {
+                        const isTimeout = err.name === 'AbortError';
+                        const isRateLimit = err.message.includes('429');
+                        const isNetwork = err.message.includes('Failed to fetch') || err.message.includes('NetworkError');
+                        if (isTimeout || isRateLimit || isNetwork) {
+                            const waitSec = isRateLimit ? 15 : 5;
+                            const reason = isTimeout ? 'Таймаут' : isRateLimit ? 'Rate limit' : 'Сеть';
+                            statusText.textContent = `${reason} — повтор через ${waitSec}с (попытка ${attempt + 2}/${retries + 1})...`;
+                            addScanLog(symbol, `${reason}: ${err.message} — повтор...`, 'warn');
+                            await delay(waitSec * 1000);
                             continue;
                         }
-                        throw new Error(`Таймаут запроса (30с) — API не отвечает`);
-                    }
-                    if (err.message.includes('429') && attempt < retries) {
-                        statusText.textContent = `Rate limit — жду 15с (попытка ${attempt + 2}/${retries + 1})...`;
-                        await delay(15000);
-                        continue;
                     }
                     throw err;
                 }
