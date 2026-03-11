@@ -1440,6 +1440,9 @@
                     { time: endTime + step * 5, value: takePrice },
                 ]);
                 advisorSegmentSeries.push(trajSeries);
+
+                // Scroll right to show trajectory in future
+                chart.timeScale().scrollToPosition(5, false);
             }
         }
 
@@ -1685,6 +1688,145 @@
 
         document.getElementById('loadChartBtn').addEventListener('click', startChart);
 
+        // --- Draw trade plan from URL params (works from Telegram links) ---
+        function drawUrlTradePlan() {
+            const p = new URLSearchParams(window.location.search);
+            const entryPrice = parseFloat(p.get('entry'));
+            const stopPrice = parseFloat(p.get('stop'));
+            const takePrice = parseFloat(p.get('take'));
+            const dir = p.get('dir');
+            const rr = parseFloat(p.get('rr'));
+            if (!entryPrice || !stopPrice || !takePrice || !dir) return;
+
+            const isLong = dir === 'up';
+            const fp = (v) => v >= 10 ? v.toFixed(2) : v.toFixed(5);
+
+            // Entry line
+            advisorPriceLines.push(candleSeries.createPriceLine({
+                price: entryPrice,
+                color: '#ffeb3b',
+                lineWidth: 2,
+                lineStyle: LightweightCharts.LineStyle.Solid,
+                axisLabelVisible: true,
+                title: `▶ Entry ${fp(entryPrice)}`,
+            }));
+            // Stop line
+            advisorPriceLines.push(candleSeries.createPriceLine({
+                price: stopPrice,
+                color: '#ef5350',
+                lineWidth: 1,
+                lineStyle: LightweightCharts.LineStyle.Dashed,
+                axisLabelVisible: true,
+                title: `Stop ${fp(stopPrice)}`,
+            }));
+            // Take line
+            advisorPriceLines.push(candleSeries.createPriceLine({
+                price: takePrice,
+                color: '#00e676',
+                lineWidth: 1,
+                lineStyle: LightweightCharts.LineStyle.Dashed,
+                axisLabelVisible: true,
+                title: `Take ${fp(takePrice)}`,
+            }));
+
+            // Get last candle time for zones and trajectory
+            const allCandles = candleSeries.data ? candleSeries.data() : [];
+            const lastCandle = allCandles.length > 0 ? allCandles[allCandles.length - 1] : null;
+            if (!lastCandle) return;
+
+            const endTime = lastCandle.time;
+            const currentPrice = lastCandle.close;
+            const step = 1800; // 30min
+
+            // Green profit zone
+            const profitSeries = chart.addAreaSeries({
+                topColor: isLong ? 'rgba(0,230,118,0.12)' : 'rgba(0,230,118,0.0)',
+                bottomColor: isLong ? 'rgba(0,230,118,0.0)' : 'rgba(0,230,118,0.12)',
+                lineColor: 'rgba(0,0,0,0)', lineWidth: 0,
+                lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false,
+            });
+            profitSeries.setData([
+                { time: endTime - step * 10, value: isLong ? takePrice : entryPrice },
+                { time: endTime + step * 5, value: isLong ? takePrice : entryPrice },
+            ]);
+            advisorSegmentSeries.push(profitSeries);
+
+            const profitBase = chart.addLineSeries({
+                color: 'rgba(0,0,0,0)', lineWidth: 0,
+                lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false,
+            });
+            profitBase.setData([
+                { time: endTime - step * 10, value: isLong ? entryPrice : takePrice },
+                { time: endTime + step * 5, value: isLong ? entryPrice : takePrice },
+            ]);
+            advisorSegmentSeries.push(profitBase);
+
+            // Red risk zone
+            const riskSeries = chart.addAreaSeries({
+                topColor: isLong ? 'rgba(239,83,80,0.0)' : 'rgba(239,83,80,0.12)',
+                bottomColor: isLong ? 'rgba(239,83,80,0.12)' : 'rgba(239,83,80,0.0)',
+                lineColor: 'rgba(0,0,0,0)', lineWidth: 0,
+                lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false,
+            });
+            riskSeries.setData([
+                { time: endTime - step * 10, value: isLong ? entryPrice : stopPrice },
+                { time: endTime + step * 5, value: isLong ? entryPrice : stopPrice },
+            ]);
+            advisorSegmentSeries.push(riskSeries);
+
+            const riskBase = chart.addLineSeries({
+                color: 'rgba(0,0,0,0)', lineWidth: 0,
+                lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false,
+            });
+            riskBase.setData([
+                { time: endTime - step * 10, value: isLong ? stopPrice : entryPrice },
+                { time: endTime + step * 5, value: isLong ? stopPrice : entryPrice },
+            ]);
+            advisorSegmentSeries.push(riskBase);
+
+            // Trajectory line (expected price movement)
+            const pullbackOffset = Math.abs(entryPrice - stopPrice) * 0.3;
+            const pullback = isLong ? entryPrice - pullbackOffset : entryPrice + pullbackOffset;
+            const trajColor = isLong ? 'rgba(0,230,118,0.6)' : 'rgba(239,83,80,0.6)';
+            const trajSeries = chart.addLineSeries({
+                color: trajColor, lineWidth: 2,
+                lineStyle: LightweightCharts.LineStyle.Dashed,
+                lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false,
+            });
+            trajSeries.setData([
+                { time: endTime, value: currentPrice },
+                { time: endTime + step, value: entryPrice },
+                { time: endTime + step * 2, value: pullback },
+                { time: endTime + step * 5, value: takePrice },
+            ]);
+            advisorSegmentSeries.push(trajSeries);
+
+            // R:R marker
+            if (rr) {
+                advisorMarkers.push({
+                    time: endTime,
+                    position: isLong ? 'belowBar' : 'aboveBar',
+                    color: '#ffeb3b',
+                    shape: 'square',
+                    size: 2,
+                    text: `R:R 1:${rr.toFixed(1)}`,
+                });
+            }
+            // Direction marker
+            advisorMarkers.push({
+                time: endTime,
+                position: isLong ? 'belowBar' : 'aboveBar',
+                color: isLong ? '#00e676' : '#ef5350',
+                shape: isLong ? 'arrowUp' : 'arrowDown',
+                size: 3,
+                text: isLong ? 'LONG' : 'SHORT',
+            });
+            flushMarkers();
+
+            // Scroll to show trajectory
+            chart.timeScale().scrollToPosition(5, false);
+        }
+
         // Auto-start chart + advisor when opened from scanner with analyze=1
         const urlParams = new URLSearchParams(window.location.search);
         if (urlParams.get('analyze') === '1') {
@@ -1724,9 +1866,10 @@
                 runAdvisor(scannerData);
                 advisorTimer = setInterval(() => runAdvisor(), 60000);
             } else {
-                // No cached data — fall back to normal load + advisor
+                // No cached data — load chart, draw trade plan from URL, then run advisor
                 (async () => {
                     await startChart();
+                    drawUrlTradePlan();
                     if (!advisorActive) {
                         advisorBtn.click();
                     }
