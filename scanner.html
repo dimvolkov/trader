@@ -1701,7 +1701,7 @@
             const dir = e.direction === 'up' ? 'LONG ↑' : 'SHORT ↓';
             const fp = (v) => v >= 10 ? v.toFixed(2) : v.toFixed(5);
 
-            const chartUrl = `https://trader.kachestvobiz-ai.ru/index.html?pair=${encodeURIComponent(pair)}&analyze=1`;
+            const chartUrl = `https://trader.kachestvobiz-ai.ru/index.html?pair=${encodeURIComponent(pair)}&tf=30&analyze=1`;
 
             const text = [
                 `📊 *${pair} — ${dir}*`,

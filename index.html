@@ -326,7 +326,7 @@
         let currentCandle = null;
         let openPrice = null;
         let chartType = 'candle';
-        let currentTF = '1';
+        let currentTF = new URLSearchParams(window.location.search).get('tf') || '1';
         let priceLines = [];
 
         const TF_CONFIG = {
@@ -406,6 +406,14 @@
         });
 
         // --- Timeframe toggle ---
+        // Set active button from URL param
+        if (currentTF !== '1') {
+            const initBtn = document.querySelector(`.timeframes button[data-tf="${currentTF}"]`);
+            if (initBtn) {
+                document.querySelector('.timeframes .active').classList.remove('active');
+                initBtn.classList.add('active');
+            }
+        }
         document.querySelectorAll('.timeframes button').forEach(btn => {
             btn.addEventListener('click', () => {
                 document.querySelector('.timeframes .active').classList.remove('active');
