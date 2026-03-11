@@ -890,6 +890,13 @@
             return new Promise(resolve => setTimeout(resolve, ms));
         }
 
+        function fetchWithTimeout(url, options = {}, timeoutMs = 30000) {
+            const controller = new AbortController();
+            const timer = setTimeout(() => controller.abort(), timeoutMs);
+            return fetch(url, { ...options, signal: controller.signal })
+                .finally(() => clearTimeout(timer));
+        }
+
         // Convert "EUR/USD" → "EURUSD"
         function pairConcat(symbol) {
             return symbol.replace('/', '');
@@ -898,7 +905,7 @@
         // --- Twelve Data ---
         async function fetchTwelveData(symbol, interval) {
             const url = `https://api.twelvedata.com/time_series?symbol=${symbol}&interval=${interval}&outputsize=500&apikey=${getApiKey('twelvedata')}`;
-            const res = await fetch(url);
+            const res = await fetchWithTimeout(url);
             const data = await res.json();
             if (data.status === 'ok' && data.values) {
                 return data.values.reverse().map(v => ({
@@ -933,7 +940,7 @@
             const startDate = from.toISOString().slice(0, 10);
             const endDate = now.toISOString().slice(0, 10);
             const url = `https://marketdata.tradermade.com/api/v1/timeseries?currency=${pair}&api_key=${getApiKey('tradermade')}&start_date=${startDate}&end_date=${endDate}&interval=${tmInterval}${tmPeriod}&format=records`;
-            const res = await fetch(url);
+            const res = await fetchWithTimeout(url);
             const data = await res.json();
             if (data.quotes && Array.isArray(data.quotes)) {
                 return data.quotes.map(q => ({
@@ -969,7 +976,7 @@
             const fromDate = from.toISOString().slice(0, 10);
             const toDate = now.toISOString().slice(0, 10);
             const url = `https://api.polygon.io/v2/aggs/ticker/${ticker}/range/${multiplier}/${timespan}/${fromDate}/${toDate}?adjusted=true&sort=asc&limit=5000&apiKey=${getApiKey('polygon')}`;
-            const res = await fetch(url);
+            const res = await fetchWithTimeout(url);
             const data = await res.json();
             if (data.status === 'OK' && data.results) {
                 return data.results.map(r => ({
@@ -996,7 +1003,7 @@
             const to = Math.floor(Date.now() / 1000);
             const from = to - 90 * 86400;
             const url = `https://finnhub.io/api/v1/forex/candle?symbol=${fhSymbol}&resolution=${resolution}&from=${from}&to=${to}&token=${getApiKey('finnhub')}`;
-            const res = await fetch(url);
+            const res = await fetchWithTimeout(url);
             const data = await res.json();
             if (data.s === 'ok' && data.c && data.c.length > 0) {
                 return data.t.map((t, i) => ({
@@ -1011,7 +1018,7 @@
         async function fetchFcsApi(symbol, interval) {
             const period = interval === '1h' ? '1h' : interval === '30min' ? '30m' : '1h';
             const url = `https://fcsapi.com/api-v3/forex/history?symbol=${symbol}&period=${period}&access_key=${getApiKey('fcsapi')}`;
-            const res = await fetch(url);
+            const res = await fetchWithTimeout(url);
             const data = await res.json();
             console.log('FCS API raw response:', JSON.stringify(data).substring(0, 1000));
             console.log('FCS API keys:', Object.keys(data), 'response type:', typeof data.response, 'response value:', data.response);
@@ -1058,7 +1065,7 @@
             const parts = symbol.split('/');
             const ivParam = interval === '30min' ? '30min' : '60min';
             const url = `https://www.alphavantage.co/query?function=FX_INTRADAY&from_symbol=${parts[0]}&to_symbol=${parts[1]}&interval=${ivParam}&outputsize=full&apikey=${getApiKey('alphavantage')}`;
-            const res = await fetch(url);
+            const res = await fetchWithTimeout(url);
             const data = await res.json();
             const tsKey = Object.keys(data).find(k => k.startsWith('Time Series'));
             if (tsKey && data[tsKey]) {
@@ -1079,9 +1086,12 @@
             const instrument = parts[0] + '_' + parts[1];
             const granularity = interval === '1h' ? 'H1' : interval === '30min' ? 'M30' : 'H1';
             const url = `https://api-fxpractice.oanda.com/v3/instruments/${instrument}/candles?granularity=${granularity}&count=500&price=M`;
+            const controller = new AbortController();
+            const timer = setTimeout(() => controller.abort(), 30000);
             const res = await fetch(url, {
-                headers: { 'Authorization': 'Bearer ' + getApiKey('oanda') }
-            });
+                headers: { 'Authorization': 'Bearer ' + getApiKey('oanda') },
+                signal: controller.signal,
+            }).finally(() => clearTimeout(timer));
             if (!res.ok) {
                 const err = await res.json().catch(() => ({}));
                 throw new Error(err.errorMessage || `OANDA error ${res.status}`);
@@ -1109,6 +1119,14 @@
                 try {
                     return await fetchFn(symbol, interval);
                 } catch (err) {
+                    if (err.name === 'AbortError') {
+                        if (attempt < retries) {
+                            statusText.textContent = `Таймаут — повтор (попытка ${attempt + 2}/${retries + 1})...`;
+                            await delay(3000);
+                            continue;
+                        }
+                        throw new Error(`Таймаут запроса (30с) — API не отвечает`);
+                    }
                     if (err.message.includes('429') && attempt < retries) {
                         statusText.textContent = `Rate limit — жду 15с (попытка ${attempt + 2}/${retries + 1})...`;
                         await delay(15000);
