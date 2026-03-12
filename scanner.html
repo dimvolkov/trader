@@ -1289,7 +1289,7 @@
                 <td>${rrHtml}</td>
                 <td>${sizeHtml}</td>
                 <td>${riskProfitHtml}</td>
-                <td class="neutral scan-time" onclick="event.stopPropagation(); toggleHistory('${pair}')" title="Показать историю">${result.scanTime ? new Date(result.scanTime).toLocaleTimeString() : '—'}</td>
+                <td class="neutral scan-time" onclick="event.stopPropagation(); toggleHistory('${pair}')" title="Показать историю">${result.scanTime ? new Date(result.scanTime).toLocaleDateString('ru-RU', {day:'2-digit',month:'2-digit'}) + ' ' + new Date(result.scanTime).toLocaleTimeString() : '—'}</td>
                 <td><button class="chart-btn" onclick="event.stopPropagation(); openChart('${pair}', ${hasValid})" title="Открыть график">📈</button></td>
             </tr>`;
 
@@ -1634,7 +1634,7 @@
                 const verdict = h.valid ? '<span class="verdict-ok">Вход</span>' : `<span class="neutral">${h.verdict || 'Нет входа'}</span>`;
                 const rr = h.rr ? `1:${h.rr.toFixed(1)}` : '—';
                 const rowClass = h.valid ? ' class="history-valid"' : '';
-                const time = new Date(h.time).toLocaleTimeString();
+                const time = new Date(h.time).toLocaleDateString('ru-RU', {day:'2-digit',month:'2-digit'}) + ' ' + new Date(h.time).toLocaleTimeString();
                 tableHtml += `<tr${rowClass}><td>${time}</td><td><span class="${trendClass}">${trendIcon}</span></td><td>${verdict}</td><td>${rr}</td></tr>`;
             }
             tableHtml += `</tbody></table>`;
