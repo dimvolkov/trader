@@ -7,6 +7,37 @@ services:
     networks:
       - dokploy-network
 
+  scanner:
+    build: ./server-scanner
+    restart: unless-stopped
+    environment:
+      # Telegram (обязательно)
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN:-}
+      - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID:-}
+      # Источник данных: twelvedata, tradermade, polygon, finnhub, fcsapi, alphavantage, oanda
+      - DATA_SOURCE=${DATA_SOURCE:-twelvedata}
+      # API ключи (укажите для выбранного источника)
+      - API_KEY_TWELVEDATA=${API_KEY_TWELVEDATA:-8694f4e28a974a0eba808458ceb33bfb}
+      - API_KEY_TRADERMADE=${API_KEY_TRADERMADE:-}
+      - API_KEY_POLYGON=${API_KEY_POLYGON:-}
+      - API_KEY_FINNHUB=${API_KEY_FINNHUB:-}
+      - API_KEY_FCSAPI=${API_KEY_FCSAPI:-}
+      - API_KEY_ALPHAVANTAGE=${API_KEY_ALPHAVANTAGE:-}
+      - API_KEY_OANDA=${API_KEY_OANDA:-}
+      # Валютные пары (через запятую)
+      - WATCHLIST=${WATCHLIST:-EUR/USD,GBP/USD,USD/JPY,USD/CHF}
+      # Расписание (московское время UTC+3)
+      - SCHEDULE_FROM=${SCHEDULE_FROM:-8}
+      - SCHEDULE_TO=${SCHEDULE_TO:-20}
+      - SCAN_INTERVAL_HOURS=${SCAN_INTERVAL_HOURS:-1}
+      # Управление рисками
+      - DEPOSIT=${DEPOSIT:-100000}
+      - RISK_PCT=${RISK_PCT:-0.01}
+      # Домен для ссылок на график
+      - DOMAIN=${DOMAIN:-trader.kachestvobiz-ai.ru}
+    networks:
+      - dokploy-network
+
 networks:
   dokploy-network:
     external: true

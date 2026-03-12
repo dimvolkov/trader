@@ -1,0 +1,10 @@
+{
+  "name": "trader-scanner",
+  "version": "1.0.0",
+  "description": "Server-side forex scanner with Telegram notifications",
+  "main": "scanner.js",
+  "scripts": {
+    "start": "node scanner.js"
+  },
+  "dependencies": {}
+}
