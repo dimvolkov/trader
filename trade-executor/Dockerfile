@@ -9,13 +9,17 @@ RUN apt-get update && apt-get install -y \
     software-properties-common gnupg2 git net-tools \
     && rm -rf /var/lib/apt/lists/*
 
-# ─── 2. Wine ───
+# ─── 2. Wine (9.0 — proven to work in Docker, unlike Wine 11) ───
 RUN dpkg --add-architecture i386 \
     && mkdir -pm755 /etc/apt/keyrings \
     && wget -O /etc/apt/keyrings/winehq-archive.key https://dl.winehq.org/wine-builds/winehq.key \
     && wget -NP /etc/apt/sources.list.d/ https://dl.winehq.org/wine-builds/ubuntu/dists/jammy/winehq-jammy.sources \
     && apt-get update \
-    && (apt-get install -y --install-recommends winehq-stable || apt-get install -y wine64 wine32) \
+    && apt-get install -y --install-recommends \
+        wine-stable-amd64=9.0.0.0~jammy-1 \
+        wine-stable-i386:i386=9.0.0.0~jammy-1 \
+        wine-stable=9.0.0.0~jammy-1 \
+        winehq-stable=9.0.0.0~jammy-1 \
     && rm -rf /var/lib/apt/lists/*
 
 # ─── 3. Winetricks ───
