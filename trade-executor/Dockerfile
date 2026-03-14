@@ -22,7 +22,7 @@ RUN git clone --depth 1 https://github.com/novnc/noVNC.git /opt/novnc \
 # ─── 4. Python (Linux) dependencies for FastAPI ───
 WORKDIR /opt/trade-executor
 COPY requirements.txt .
-RUN pip3 install --no-cache-dir -r requirements.txt
+RUN pip3 install --no-cache-dir --break-system-packages -r requirements.txt
 
 # ─── 5. Copy application ───
 COPY executor.py mt5_bridge.py entrypoint.sh ./
