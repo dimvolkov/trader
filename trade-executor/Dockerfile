@@ -30,7 +30,8 @@ RUN git clone --depth 1 https://github.com/novnc/noVNC.git /opt/novnc \
     && ln -s /opt/novnc/vnc.html /opt/novnc/index.html
 
 # ─── 5. Initialize Wine prefix + Windows components ───
-RUN Xvfb :99 -screen 0 1280x800x24 -ac & \
+RUN mkdir -p /opt/mt5/wine \
+    && Xvfb :99 -screen 0 1280x800x24 -ac & \
     sleep 2 \
     && wineboot --init \
     && sleep 5 \
