@@ -6,6 +6,7 @@ export DISPLAY=:99
 
 # ─── 1. Start Xvfb ───
 echo "Starting Xvfb..."
+rm -f /tmp/.X99-lock
 Xvfb :99 -screen 0 1280x800x24 -ac &
 sleep 2
 
