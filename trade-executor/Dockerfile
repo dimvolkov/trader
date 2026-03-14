@@ -1,8 +1,6 @@
 FROM ubuntu:22.04
 
 ENV DEBIAN_FRONTEND=noninteractive
-ENV WINEPREFIX=/data/wine
-ENV WINEARCH=win64
 ENV DISPLAY=:99
 
 # ─── 1. System packages ───
