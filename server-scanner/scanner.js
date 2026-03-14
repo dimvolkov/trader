@@ -36,6 +36,11 @@ const CONFIG = {
 
     // Domain for chart links
     domain: process.env.DOMAIN || 'trader.kachestvobiz-ai.ru',
+
+    // Trade Executor (auto-trading)
+    executorUrl: process.env.EXECUTOR_URL || '',           // e.g. http://your-server:8500
+    executorSecret: process.env.EXECUTOR_API_SECRET || '', // shared secret
+    autoTrade: process.env.AUTO_TRADE === 'true',          // enable auto-trading
 };
 
 const MAX_RISK = CONFIG.deposit * CONFIG.riskPct;
@@ -575,6 +580,47 @@ async function sendTelegramNotification(pair, result) {
     }
 }
 
+// ─── Trade Executor ───
+async function sendOrderToExecutor(pair, result) {
+    if (!CONFIG.executorUrl || !CONFIG.executorSecret || !CONFIG.autoTrade) {
+        return;
+    }
+
+    const e = result.entry;
+    const payload = {
+        pair,
+        direction: e.direction,
+        entry: e.entry,
+        stop: e.stop,
+        take: e.take,
+        rr: e.rr,
+        volume: 0, // auto-calculate on executor side
+        deposit: CONFIG.deposit,
+        risk_pct: CONFIG.riskPct,
+    };
+
+    try {
+        const res = await fetchWithTimeout(`${CONFIG.executorUrl}/order`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-API-Secret': CONFIG.executorSecret,
+            },
+            body: JSON.stringify(payload),
+        });
+
+        const data = await res.json().catch(() => ({}));
+
+        if (data.success) {
+            log(`  ${pair}: ORDER EXECUTED — id=${data.order_id} vol=${data.volume} price=${data.price}`);
+        } else {
+            log(`  ${pair}: ORDER FAILED — ${data.error || res.status}`);
+        }
+    } catch (err) {
+        log(`  ${pair}: EXECUTOR ERROR — ${err.message}`);
+    }
+}
+
 // ─── Main Scan Cycle ───
 async function runScanCycle() {
     const pairs = CONFIG.watchlist;
@@ -602,6 +648,7 @@ async function runScanCycle() {
             if (result.entry && result.entry.valid) {
                 log(`  ${pair}: SIGNAL FOUND! ${result.entry.direction === 'up' ? 'LONG' : 'SHORT'} R:R=${result.rr.toFixed(2)}`);
                 await sendTelegramNotification(pair, result);
+                await sendOrderToExecutor(pair, result);
             } else if (result.entry && !result.entry.valid) {
                 log(`  ${pair}: signal present but ${result.entry.reason}`);
             } else if (result.trend === 'range') {
@@ -637,6 +684,7 @@ async function schedulerLoop() {
     log(`  Watchlist: ${CONFIG.watchlist.join(', ')}`);
     log(`  Schedule: ${CONFIG.scheduleFrom}:00 - ${CONFIG.scheduleTo}:00 MSK, every ${CONFIG.intervalHours}h`);
     log(`  Telegram: ${CONFIG.telegramBotToken ? 'configured' : 'NOT configured'}`);
+    log(`  Auto-trade: ${CONFIG.autoTrade ? `ON → ${CONFIG.executorUrl}` : 'OFF'}`);
 
     while (true) {
         const moscowHour = getMoscowHour();

@@ -1,0 +1,33 @@
+services:
+  trade-executor:
+    build: .
+    restart: unless-stopped
+    expose:
+      - "8500"
+      - "6080"
+    volumes:
+      # Wine prefix + MT5 data persists between container rebuilds
+      - wine-data:/data/wine
+      # Trade logs
+      - executor-logs:/opt/trade-executor/data
+    environment:
+      - EXECUTOR_API_SECRET=${EXECUTOR_API_SECRET:-change-me-to-a-real-secret}
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN:-}
+      - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID:-}
+      - MAX_OPEN_POSITIONS=${MAX_OPEN_POSITIONS:-5}
+      - LOG_FILE=/opt/trade-executor/data/trades.log
+      - TRADE_LOG_JSON=/opt/trade-executor/data/trades.jsonl
+      - WINE_PYTHON=python
+      - MT5_TIMEOUT=30
+      # VNC password for noVNC (optional)
+      - VNC_PASSWORD=${VNC_PASSWORD:-}
+    networks:
+      - dokploy-network
+
+networks:
+  dokploy-network:
+    external: true
+
+volumes:
+  wine-data:
+  executor-logs:

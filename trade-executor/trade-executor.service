@@ -1,0 +1,21 @@
+[Unit]
+Description=Trade Executor (MT5 via Wine)
+After=network.target
+Wants=xvfb.service
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/trade-executor
+EnvironmentFile=/opt/trade-executor/.env
+Environment=DISPLAY=:99
+Environment=WINEPREFIX=/opt/trade-executor/wine
+
+# Start Xvfb before executor
+ExecStartPre=/usr/bin/bash -c 'pgrep Xvfb || Xvfb :99 -screen 0 1024x768x16 &'
+ExecStart=/opt/trade-executor/venv/bin/uvicorn executor:app --host 0.0.0.0 --port 8500
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
