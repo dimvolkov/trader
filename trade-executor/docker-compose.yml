@@ -12,8 +12,6 @@ services:
       - executor-logs:/opt/trade-executor/data
     environment:
       - EXECUTOR_API_SECRET=${EXECUTOR_API_SECRET:-change-me-to-a-real-secret}
-      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN:-}
-      - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID:-}
       - MAX_OPEN_POSITIONS=${MAX_OPEN_POSITIONS:-5}
       - LOG_FILE=/opt/trade-executor/data/trades.log
       - TRADE_LOG_JSON=/opt/trade-executor/data/trades.jsonl

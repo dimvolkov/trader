@@ -6,23 +6,17 @@ Runs on a separate Ubuntu server with Wine + MetaTrader 5.
 import os
 import json
 import logging
-import hmac
-import hashlib
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Header, Request
-from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
-import requests
 import uvicorn
 
 import mt5_bridge
 
 # ─── Configuration ───
 API_SECRET = os.getenv("EXECUTOR_API_SECRET", "change-me-to-a-real-secret")
-TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
-TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
 MAX_OPEN_POSITIONS = int(os.getenv("MAX_OPEN_POSITIONS", "5"))
 LOG_FILE = os.getenv("LOG_FILE", "/opt/trade-executor/trades.log")
 
@@ -49,34 +43,6 @@ def log_trade(data: dict):
     data["timestamp"] = datetime.now(timezone.utc).isoformat()
     with open(TRADE_LOG, "a") as f:
         f.write(json.dumps(data, ensure_ascii=False) + "\n")
-
-
-# ─── Telegram ───
-def send_telegram(text: str):
-    """Send notification to Telegram."""
-    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
-        return
-    try:
-        requests.post(
-            f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
-            json={
-                "chat_id": TELEGRAM_CHAT_ID,
-                "text": text,
-                "parse_mode": "Markdown",
-            },
-            timeout=10,
-        )
-    except Exception as e:
-        logger.error(f"Telegram error: {e}")
-
-
-# ─── Auth ───
-def verify_signature(body: bytes, signature: str) -> bool:
-    """Verify HMAC-SHA256 signature from scanner."""
-    expected = hmac.new(
-        API_SECRET.encode(), body, hashlib.sha256
-    ).hexdigest()
-    return hmac.compare_digest(expected, signature)
 
 
 # ─── Models ───
@@ -213,21 +179,8 @@ async def create_order(order: OrderRequest, request: Request, x_api_secret: str 
 
     if result.get("success"):
         logger.info(f"Order executed: {order.pair} {mt5_direction} vol={volume} id={result.get('order_id')}")
-        send_telegram(
-            f"{'🟢' if mt5_direction == 'buy' else '🔴'} *Сделка открыта: {order.pair}*\n"
-            f"Направление: {'LONG' if mt5_direction == 'buy' else 'SHORT'}\n"
-            f"Объём: {volume} лот\n"
-            f"Цена: `{result.get('price', order.entry)}`\n"
-            f"Стоп: `{order.stop}` | Тейк: `{order.take}`\n"
-            f"R:R: 1:{order.rr:.1f}\n"
-            f"Order ID: `{result.get('order_id')}`"
-        )
     else:
         logger.error(f"Order failed: {order.pair} — {result.get('error')}")
-        send_telegram(
-            f"*Ошибка открытия: {order.pair}*\n"
-            f"{result.get('error', 'Unknown error')}"
-        )
 
     return result
 
@@ -248,7 +201,6 @@ async def close_order(ticket: int, x_api_secret: str = Header(None)):
 
     if result.get("success"):
         logger.info(f"Position closed: ticket={ticket}")
-        send_telegram(f"Position closed: ticket `{ticket}` at `{result.get('closed_price')}`")
     else:
         logger.error(f"Close failed: ticket={ticket} — {result.get('error')}")
 
