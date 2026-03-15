@@ -581,6 +581,28 @@ async function sendTelegramNotification(pair, result) {
     }
 }
 
+// ─── Telegram (generic) ───
+async function sendTelegram(text) {
+    if (!CONFIG.telegramBotToken || !CONFIG.telegramChatId) return;
+    try {
+        const res = await fetchWithTimeout(`https://api.telegram.org/bot${CONFIG.telegramBotToken}/sendMessage`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                chat_id: CONFIG.telegramChatId,
+                text,
+                parse_mode: 'Markdown',
+            }),
+        });
+        if (!res.ok) {
+            const data = await res.json().catch(() => ({}));
+            log(`  Telegram error ${res.status}: ${data.description || 'Unknown'}`);
+        }
+    } catch (err) {
+        log(`  Telegram network error: ${err.message}`);
+    }
+}
+
 // ─── Account Balance ───
 let lastAccountInfo = null;
 
@@ -666,8 +688,19 @@ async function runScanCycle() {
     const acc = await fetchAccountBalance();
     if (acc) {
         log(`  💰 ${formatBalance(acc)}`);
-        // Use real balance for position sizing
         CONFIG.deposit = acc.balance;
+
+        const fmt = (v) => v.toLocaleString('ru-RU', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+        await sendTelegram([
+            `💰 *Баланс счёта*`,
+            ``,
+            `Баланс: \`${fmt(acc.balance)} ${acc.currency}\``,
+            `Эквити: \`${fmt(acc.equity)} ${acc.currency}\``,
+            `Свободная маржа: \`${fmt(acc.free_margin)} ${acc.currency}\``,
+            `Плечо: 1:${acc.leverage}`,
+            ``,
+            `🔍 Сканирую ${pairs.length} пар...`,
+        ].join('\n'));
     } else if (CONFIG.executorUrl) {
         log(`  ⚠ Could not fetch balance, using configured deposit: ${CONFIG.deposit}`);
     }
