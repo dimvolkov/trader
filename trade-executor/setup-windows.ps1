@@ -51,4 +51,4 @@ Write-Host "  Scheduled task 'TradeExecutor' registered" -ForegroundColor Cyan
 Write-Host ""
 Write-Host "=== DONE ===" -ForegroundColor Green
 Write-Host "Reboot to verify: restart-computer" -ForegroundColor Yellow
-Write-Host "After reboot: MT5 starts -> Executor starts on port 8500" -ForegroundColor Yellow
+Write-Host "After reboot: MT5 starts, then Executor starts on port 8500" -ForegroundColor Yellow
