@@ -37,6 +37,9 @@ services:
       - RISK_PCT=${RISK_PCT:-0.01}
       # Домен для ссылок на график
       - DOMAIN=${DOMAIN:-trader.kachestvobiz-ai.ru}
+      # Trade Executor
+      - EXECUTOR_URL=${EXECUTOR_URL:-}
+      - EXECUTOR_API_SECRET=${EXECUTOR_API_SECRET:-}
     networks:
       - dokploy-network
 
