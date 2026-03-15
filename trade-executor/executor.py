@@ -1,6 +1,6 @@
 """
 Trade Executor — FastAPI service that accepts trading signals and executes them on MT5.
-Runs on a separate Ubuntu server with Wine + MetaTrader 5.
+Runs on Windows Server with native MetaTrader 5.
 """
 
 import os
@@ -18,7 +18,7 @@ import mt5_bridge
 # ─── Configuration ───
 API_SECRET = os.getenv("EXECUTOR_API_SECRET", "change-me-to-a-real-secret")
 MAX_OPEN_POSITIONS = int(os.getenv("MAX_OPEN_POSITIONS", "5"))
-LOG_FILE = os.getenv("LOG_FILE", "/opt/trade-executor/trades.log")
+LOG_FILE = os.getenv("LOG_FILE", "C:/trade-executor/trades.log")
 
 # ─── Logging ───
 logging.basicConfig(
@@ -35,7 +35,7 @@ logger = logging.getLogger("executor")
 app = FastAPI(title="Trade Executor", version="1.0.0")
 
 # ─── Trade log (JSON lines) ───
-TRADE_LOG = Path(os.getenv("TRADE_LOG_JSON", "/opt/trade-executor/trades.jsonl"))
+TRADE_LOG = Path(os.getenv("TRADE_LOG_JSON", "C:/trade-executor/trades.jsonl"))
 
 
 def log_trade(data: dict):
