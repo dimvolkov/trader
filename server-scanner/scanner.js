@@ -794,7 +794,36 @@ async function schedulerLoop() {
 }
 
 // ─── Start ───
-schedulerLoop().catch(err => {
-    log(`Fatal error: ${err.message}`);
-    process.exit(1);
-});
+if (process.argv.includes('--test-telegram')) {
+    (async () => {
+        log('Testing Telegram...');
+        // Test balance
+        const acc = await fetchAccountBalance();
+        if (acc) {
+            const fmt = (v) => v.toLocaleString('ru-RU', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+            await sendTelegram([
+                `💰 *Баланс счёта*`,
+                ``,
+                `Баланс: \`${fmt(acc.balance)} ${acc.currency}\``,
+                `Эквити: \`${fmt(acc.equity)} ${acc.currency}\``,
+                `Свободная маржа: \`${fmt(acc.free_margin)} ${acc.currency}\``,
+                `Плечо: 1:${acc.leverage}`,
+            ].join('\n'));
+            log('Balance sent to Telegram');
+        } else {
+            await sendTelegram('⚠ Не удалось получить баланс MT5');
+            log('Executor not available or error');
+        }
+        // Test signal message
+        await sendTelegram('✅ Тест Telegram — сканер работает!');
+        log('Test message sent');
+    })().catch(err => {
+        log(`Test error: ${err.message}`);
+        process.exit(1);
+    });
+} else {
+    schedulerLoop().catch(err => {
+        log(`Fatal error: ${err.message}`);
+        process.exit(1);
+    });
+}
