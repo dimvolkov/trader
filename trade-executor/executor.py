@@ -10,6 +10,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Header, Request
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 import uvicorn
 
@@ -33,6 +34,12 @@ logger = logging.getLogger("executor")
 
 # ─── App ───
 app = FastAPI(title="Trade Executor", version="1.0.0")
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # ─── Trade log (JSON lines) ───
 TRADE_LOG = Path(os.getenv("TRADE_LOG_JSON", "C:/trade-executor/trades.jsonl"))

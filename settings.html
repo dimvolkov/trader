@@ -259,6 +259,30 @@
                 <div class="test-result" id="tgTestResult"></div>
             </div>
         </div>
+
+        <div class="section">
+            <h2>Trade Executor (MT5)</h2>
+            <div class="source-card">
+                <div class="source-header">
+                    <span class="source-name">Executor API</span>
+                    <span id="execBadge"><span class="source-badge badge-empty">Не настроен</span></span>
+                </div>
+                <div class="source-info">
+                    Подключение к MT5 через Trade Executor для получения баланса и автотрейдинга.
+                </div>
+                <div class="key-row" style="margin-bottom:8px">
+                    <input type="text" class="key-input" id="execUrl" placeholder="URL (например http://localhost:8500)">
+                </div>
+                <div class="key-row">
+                    <input type="password" class="key-input" id="execSecret" placeholder="API Secret">
+                </div>
+                <div class="btn-row">
+                    <button class="btn btn-primary" onclick="saveExecutor()">Сохранить</button>
+                    <button class="btn btn-test" onclick="testExecutor()" id="execTestBtn">Проверить</button>
+                </div>
+                <div class="test-result" id="execTestResult"></div>
+            </div>
+        </div>
     </div>
 
     <script>
@@ -521,7 +545,7 @@
             document.getElementById('tgTestResult').innerHTML = '<span class="test-ok">Сохранено</span>';
         };
 
-        window.testTelegram = function() {
+        window.testTelegram = async function() {
             const botToken = document.getElementById('tgBotToken').value.trim();
             const chatId = document.getElementById('tgChatId').value.trim();
             const resultEl = document.getElementById('tgTestResult');
@@ -532,32 +556,120 @@
                 return;
             }
 
-            resultEl.innerHTML = '<span class="test-loading">Отправка...</span>';
+            resultEl.innerHTML = '<span class="test-loading">Получение баланса...</span>';
             btn.disabled = true;
 
-            fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    chat_id: chatId,
-                    text: '✅ Тестовое сообщение от Forex Scanner',
-                }),
-            })
-            .then(r => r.json())
-            .then(data => {
+            const fmt = (v) => Number(v).toLocaleString('ru-RU', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+            // Try to fetch balance from executor
+            let text = '✅ Тестовое сообщение от Forex Scanner';
+            const exec = loadExecutorSettings();
+            if (exec.url && exec.secret) {
+                try {
+                    const res = await fetch(`${exec.url}/account`, {
+                        headers: { 'X-API-Secret': exec.secret },
+                    });
+                    const data = await res.json();
+                    if (data.success) {
+                        text = [
+                            '💰 *Баланс счёта*',
+                            '',
+                            `Баланс: \`${fmt(data.balance)} ${data.currency}\``,
+                            `Эквити: \`${fmt(data.equity)} ${data.currency}\``,
+                            `Свободная маржа: \`${fmt(data.free_margin)} ${data.currency}\``,
+                            `Плечо: 1:${data.leverage}`,
+                        ].join('\n');
+                    }
+                } catch (e) {
+                    // Fallback to simple test message
+                }
+            }
+
+            resultEl.innerHTML = '<span class="test-loading">Отправка...</span>';
+
+            try {
+                const parseMode = text.includes('*') ? 'Markdown' : undefined;
+                const body = { chat_id: chatId, text };
+                if (parseMode) body.parse_mode = parseMode;
+
+                const res = await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(body),
+                });
+                const data = await res.json();
                 if (data.ok) {
                     resultEl.innerHTML = '<span class="test-ok">Сообщение отправлено!</span>';
                 } else {
                     resultEl.innerHTML = `<span class="test-fail">${data.description || 'Ошибка Telegram API'}</span>`;
                 }
-            })
-            .catch(err => {
+            } catch (err) {
                 resultEl.innerHTML = `<span class="test-fail">Ошибка: ${err.message}</span>`;
-            })
-            .finally(() => { btn.disabled = false; });
+            } finally {
+                btn.disabled = false;
+            }
         };
 
         initTelegram();
+
+        // --- Executor ---
+        function loadExecutorSettings() {
+            try { return JSON.parse(localStorage.getItem('executorSettings')) || {}; } catch { return {}; }
+        }
+
+        function initExecutor() {
+            const s = loadExecutorSettings();
+            document.getElementById('execUrl').value = s.url || '';
+            document.getElementById('execSecret').value = s.secret || '';
+            const badge = document.getElementById('execBadge');
+            if (s.url && s.secret) {
+                badge.innerHTML = '<span class="source-badge badge-active">Настроен</span>';
+            } else {
+                badge.innerHTML = '<span class="source-badge badge-empty">Не настроен</span>';
+            }
+        }
+
+        window.saveExecutor = function() {
+            const url = document.getElementById('execUrl').value.trim().replace(/\/+$/, '');
+            const secret = document.getElementById('execSecret').value.trim();
+            localStorage.setItem('executorSettings', JSON.stringify({ url, secret }));
+            initExecutor();
+            document.getElementById('execTestResult').innerHTML = '<span class="test-ok">Сохранено</span>';
+        };
+
+        window.testExecutor = async function() {
+            const url = document.getElementById('execUrl').value.trim().replace(/\/+$/, '');
+            const secret = document.getElementById('execSecret').value.trim();
+            const resultEl = document.getElementById('execTestResult');
+            const btn = document.getElementById('execTestBtn');
+
+            if (!url || !secret) {
+                resultEl.innerHTML = '<span class="test-fail">Заполните URL и Secret</span>';
+                return;
+            }
+
+            resultEl.innerHTML = '<span class="test-loading">Проверка...</span>';
+            btn.disabled = true;
+
+            try {
+                const res = await fetch(`${url}/account`, {
+                    headers: { 'X-API-Secret': secret },
+                });
+                const data = await res.json();
+                if (data.success) {
+                    const fmt = (v) => Number(v).toLocaleString('ru-RU', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+                    resultEl.innerHTML = `<span class="test-ok">Баланс: ${fmt(data.balance)} ${data.currency}</span>`;
+                } else {
+                    resultEl.innerHTML = `<span class="test-fail">${data.error || 'Ошибка'}</span>`;
+                }
+            } catch (err) {
+                resultEl.innerHTML = `<span class="test-fail">Ошибка: ${err.message}</span>`;
+            } finally {
+                btn.disabled = false;
+            }
+        };
+
+        initExecutor();
     })();
     </script>
 </body>
