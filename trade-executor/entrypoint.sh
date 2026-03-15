@@ -9,7 +9,7 @@ log() { echo "[$(date '+%H:%M:%S')] $*"; }
 # ─── 1. Start Xvfb ───
 log "Starting Xvfb..."
 rm -f /tmp/.X99-lock
-Xvfb :99 -screen 0 1280x800x24 -ac &
+Xvfb :99 -screen 0 1920x1080x24 -ac &
 sleep 3
 
 if ! xdpyinfo -display :99 >/dev/null 2>&1; then
@@ -31,6 +31,11 @@ sleep 1
 log "Starting noVNC on port 6080..."
 /opt/novnc/utils/novnc_proxy --vnc localhost:5900 --listen 6080 &
 sleep 1
+
+# ─── 3.1 Clipboard sync ───
+log "Starting clipboard sync..."
+autocutsel -fork -selection CLIPBOARD 2>/dev/null || true
+autocutsel -fork -selection PRIMARY 2>/dev/null || true
 
 # ─── 4. First run: initialize Wine + Python ───
 if [ ! -f "/data/wine/.initialized" ]; then

@@ -8,6 +8,7 @@ USER root
 # ─── 1. Extra packages ───
 RUN apt-get update && apt-get install -y \
     xvfb x11vnc python3 python3-pip git net-tools \
+    xclip autocutsel xdotool \
     && rm -rf /var/lib/apt/lists/*
 
 # ─── 2. Winetricks ───
