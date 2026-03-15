@@ -423,6 +423,7 @@
             <a href="settings.html">&#9881; API</a>
         </div>
         <div class="header-right">
+            <span id="balanceInfo" style="font-size:13px;color:#787b86"></span>
             <button id="scanBtn" onclick="scanOnce()">Сканировать</button>
         </div>
     </div>
@@ -543,10 +544,27 @@
         const DEFAULT_WATCHLIST = ['EUR/USD', 'GBP/USD', 'USD/JPY', 'USD/CHF'];
         const STORAGE_KEY = 'scannerWatchlist';
 
-        // --- Bankroll constants ---
-        const DEPOSIT = 100000; // ₽
+        // --- Bankroll ---
+        let DEPOSIT = 100000; // ₽ (default, updated from MT5)
         const RISK_PCT = 0.01;  // 1%
-        const MAX_RISK = DEPOSIT * RISK_PCT; // 1000 ₽
+        let MAX_RISK = DEPOSIT * RISK_PCT; // 1000 ₽
+
+        async function fetchBalance() {
+            try {
+                const res = await fetch('/api/account');
+                const data = await res.json();
+                if (data.success) {
+                    DEPOSIT = data.balance;
+                    MAX_RISK = DEPOSIT * RISK_PCT;
+                    const fmt = (v) => Number(v).toLocaleString('ru-RU', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+                    document.getElementById('balanceInfo').textContent =
+                        `💰 ${fmt(data.balance)} ${data.currency}`;
+                }
+            } catch (e) {
+                // executor unavailable, use default
+            }
+        }
+        fetchBalance();
 
         // --- State ---
         let scanning = false;
