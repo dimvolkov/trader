@@ -18,13 +18,9 @@ if ! xdpyinfo -display :99 >/dev/null 2>&1; then
 fi
 log "Xvfb started OK"
 
-# ─── 2. Start x11vnc ───
+# ─── 2. Start x11vnc (no auth) ───
 log "Starting VNC server..."
-if [ -n "$VNC_PASSWORD" ]; then
-    x11vnc -display :99 -forever -shared -rfbport 5900 -passwd "$VNC_PASSWORD" -bg -noxdamage -q
-else
-    x11vnc -display :99 -forever -shared -rfbport 5900 -nopw -bg -noxdamage -q
-fi
+x11vnc -display :99 -forever -shared -rfbport 5900 -nopw -bg -noxdamage -q
 sleep 1
 
 # ─── 3. Start noVNC ───
