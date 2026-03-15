@@ -12,7 +12,7 @@ import logging
 
 logger = logging.getLogger("mt5_bridge")
 
-WINEPREFIX = os.getenv("WINEPREFIX", "/opt/trade-executor/wine")
+WINEPREFIX = os.getenv("WINEPREFIX", "/data/wine")
 WINE_PYTHON = os.getenv("WINE_PYTHON", "python.exe")
 MT5_TIMEOUT = int(os.getenv("MT5_TIMEOUT", "30"))
 
