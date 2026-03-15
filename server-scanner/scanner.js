@@ -804,7 +804,7 @@ const apiServer = http.createServer(async (req, res) => {
     if (req.url === '/api/balance') {
         if (!CONFIG.executorUrl || !CONFIG.executorSecret) {
             res.statusCode = 503;
-            res.end(JSON.stringify({ success: false, error: 'Executor not configured', hasUrl: !!CONFIG.executorUrl, hasSecret: !!CONFIG.executorSecret }));
+            res.end(JSON.stringify({ success: false, error: 'Executor not configured' }));
             return;
         }
         const acc = lastAccountInfo || await fetchAccountBalance();
@@ -812,7 +812,7 @@ const apiServer = http.createServer(async (req, res) => {
             res.end(JSON.stringify({ success: true, balance: acc.balance, equity: acc.equity, free_margin: acc.free_margin, currency: acc.currency, leverage: acc.leverage }));
         } else {
             res.statusCode = 503;
-            res.end(JSON.stringify({ success: false, error: 'MT5 unavailable', executorUrl: CONFIG.executorUrl }));
+            res.end(JSON.stringify({ success: false, error: 'MT5 unavailable' }));
         }
     } else if (req.url === '/api/send-balance-telegram') {
         if (!CONFIG.telegramBotToken || !CONFIG.telegramChatId) {
