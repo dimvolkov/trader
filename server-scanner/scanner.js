@@ -555,6 +555,7 @@ async function sendTelegramNotification(pair, result) {
         `R:R: *1:${e.rr.toFixed(1)}*`,
         `Размер: ${e.positionSize.toFixed(2)}`,
         `Риск: ${e.potentialLoss.toFixed(0)}₽ → Прибыль: ${e.potentialProfit.toFixed(0)}₽`,
+        lastAccountInfo ? `Баланс: ${lastAccountInfo.balance.toLocaleString('ru-RU', {minimumFractionDigits: 2})} ${lastAccountInfo.currency}` : '',
         ``,
         `[📈 Открыть график](${chartUrl})`,
     ].join('\n');
@@ -578,6 +579,39 @@ async function sendTelegramNotification(pair, result) {
     } catch (err) {
         log(`  ${pair}: Telegram network error: ${err.message}`);
     }
+}
+
+// ─── Account Balance ───
+let lastAccountInfo = null;
+
+async function fetchAccountBalance() {
+    if (!CONFIG.executorUrl || !CONFIG.executorSecret) {
+        return null;
+    }
+
+    try {
+        const res = await fetchWithTimeout(`${CONFIG.executorUrl}/account`, {
+            headers: { 'X-API-Secret': CONFIG.executorSecret },
+        });
+
+        const data = await res.json().catch(() => ({}));
+
+        if (data.success) {
+            lastAccountInfo = data;
+            return data;
+        } else {
+            log(`  Account balance error: ${data.error || res.status}`);
+            return null;
+        }
+    } catch (err) {
+        log(`  Account balance fetch error: ${err.message}`);
+        return null;
+    }
+}
+
+function formatBalance(acc) {
+    const fmt = (v) => v.toLocaleString('ru-RU', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    return `Balance: ${fmt(acc.balance)} ${acc.currency} | Equity: ${fmt(acc.equity)} ${acc.currency} | Free margin: ${fmt(acc.free_margin)} ${acc.currency}`;
 }
 
 // ─── Trade Executor ───
@@ -627,6 +661,16 @@ async function runScanCycle() {
     const rateDelay = RATE_DELAYS[CONFIG.dataSource] || 12000;
 
     log(`=== Scan started: ${pairs.length} pairs [${CONFIG.dataSource}] ===`);
+
+    // Fetch actual account balance from MT5
+    const acc = await fetchAccountBalance();
+    if (acc) {
+        log(`  💰 ${formatBalance(acc)}`);
+        // Use real balance for position sizing
+        CONFIG.deposit = acc.balance;
+    } else if (CONFIG.executorUrl) {
+        log(`  ⚠ Could not fetch balance, using configured deposit: ${CONFIG.deposit}`);
+    }
 
     if (!getApiKey()) {
         log(`ERROR: No API key for ${CONFIG.dataSource}`);
@@ -685,6 +729,16 @@ async function schedulerLoop() {
     log(`  Schedule: ${CONFIG.scheduleFrom}:00 - ${CONFIG.scheduleTo}:00 MSK, every ${CONFIG.intervalHours}h`);
     log(`  Telegram: ${CONFIG.telegramBotToken ? 'configured' : 'NOT configured'}`);
     log(`  Auto-trade: ${CONFIG.autoTrade ? `ON → ${CONFIG.executorUrl}` : 'OFF'}`);
+
+    // Initial balance check on startup
+    if (CONFIG.executorUrl && CONFIG.executorSecret) {
+        const acc = await fetchAccountBalance();
+        if (acc) {
+            log(`  💰 ${formatBalance(acc)}`);
+        } else {
+            log(`  ⚠ Executor configured but could not fetch account balance`);
+        }
+    }
 
     while (true) {
         const moscowHour = getMoscowHour();
