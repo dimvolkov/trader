@@ -814,6 +814,28 @@ const apiServer = http.createServer(async (req, res) => {
             res.statusCode = 503;
             res.end(JSON.stringify({ success: false, error: 'MT5 unavailable', executorUrl: CONFIG.executorUrl }));
         }
+    } else if (req.url === '/api/send-balance-telegram') {
+        if (!CONFIG.telegramBotToken || !CONFIG.telegramChatId) {
+            res.statusCode = 503;
+            res.end(JSON.stringify({ success: false, error: 'Telegram not configured' }));
+            return;
+        }
+        const acc = lastAccountInfo || await fetchAccountBalance();
+        if (acc) {
+            const fmt = (v) => v.toLocaleString('ru-RU', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+            await sendTelegram([
+                `💰 *Баланс счёта*`,
+                ``,
+                `Баланс: \`${fmt(acc.balance)} ${acc.currency}\``,
+                `Эквити: \`${fmt(acc.equity)} ${acc.currency}\``,
+                `Свободная маржа: \`${fmt(acc.free_margin)} ${acc.currency}\``,
+                `Плечо: 1:${acc.leverage}`,
+            ].join('\n'));
+            res.end(JSON.stringify({ success: true }));
+        } else {
+            res.statusCode = 503;
+            res.end(JSON.stringify({ success: false, error: 'MT5 unavailable' }));
+        }
     } else {
         res.statusCode = 404;
         res.end(JSON.stringify({ error: 'not found' }));

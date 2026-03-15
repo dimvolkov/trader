@@ -533,47 +533,16 @@
                 return;
             }
 
-            resultEl.innerHTML = '<span class="test-loading">Получение баланса...</span>';
+            resultEl.innerHTML = '<span class="test-loading">Отправка баланса в Telegram...</span>';
             btn.disabled = true;
 
-            const fmt = (v) => Number(v).toLocaleString('ru-RU', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-
-            // Try to fetch balance from executor via nginx proxy
-            let text = '✅ Тестовое сообщение от Forex Scanner';
             try {
-                const res = await fetch('/api/balance');
+                const res = await fetch('/api/send-balance-telegram');
                 const data = await res.json();
                 if (data.success) {
-                    text = [
-                        '💰 *Баланс счёта*',
-                        '',
-                        `Баланс: \`${fmt(data.balance)} ${data.currency}\``,
-                        `Эквити: \`${fmt(data.equity)} ${data.currency}\``,
-                        `Свободная маржа: \`${fmt(data.free_margin)} ${data.currency}\``,
-                        `Плечо: 1:${data.leverage}`,
-                    ].join('\n');
-                }
-            } catch (e) {
-                // Fallback to simple test message
-            }
-
-            resultEl.innerHTML = '<span class="test-loading">Отправка...</span>';
-
-            try {
-                const parseMode = text.includes('*') ? 'Markdown' : undefined;
-                const body = { chat_id: chatId, text };
-                if (parseMode) body.parse_mode = parseMode;
-
-                const res = await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(body),
-                });
-                const data = await res.json();
-                if (data.ok) {
-                    resultEl.innerHTML = '<span class="test-ok">Сообщение отправлено!</span>';
+                    resultEl.innerHTML = '<span class="test-ok">Баланс отправлен в Telegram!</span>';
                 } else {
-                    resultEl.innerHTML = `<span class="test-fail">${data.description || 'Ошибка Telegram API'}</span>`;
+                    resultEl.innerHTML = `<span class="test-fail">${data.error || 'Ошибка'}</span>`;
                 }
             } catch (err) {
                 resultEl.innerHTML = `<span class="test-fail">Ошибка: ${err.message}</span>`;
