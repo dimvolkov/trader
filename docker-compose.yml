@@ -4,6 +4,9 @@ services:
     expose:
       - "3000"
     restart: unless-stopped
+    environment:
+      - EXECUTOR_URL=${EXECUTOR_URL:-http://trade-executor:8500}
+      - EXECUTOR_API_SECRET=${EXECUTOR_API_SECRET:-}
     networks:
       - dokploy-network
 

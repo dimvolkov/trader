@@ -6,6 +6,12 @@ server {
         index index.html;
     }
 
+    location /api/ {
+        proxy_pass ${EXECUTOR_URL}/;
+        proxy_set_header X-API-Secret ${EXECUTOR_API_SECRET};
+        proxy_set_header Host $host;
+    }
+
     location = /favicon.ico {
         return 204;
         access_log off;
