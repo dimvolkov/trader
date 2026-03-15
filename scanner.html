@@ -551,7 +551,7 @@
 
         async function fetchBalance() {
             try {
-                const res = await fetch('/api/account');
+                const res = await fetch('/api/balance');
                 const data = await res.json();
                 if (data.success) {
                     DEPOSIT = data.balance;

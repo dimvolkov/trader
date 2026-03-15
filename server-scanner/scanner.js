@@ -793,6 +793,30 @@ async function schedulerLoop() {
     }
 }
 
+// ─── HTTP API for frontend ───
+const http = require('http');
+const API_PORT = process.env.SCANNER_API_PORT || 3001;
+
+const apiServer = http.createServer(async (req, res) => {
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Content-Type', 'application/json');
+
+    if (req.url === '/api/balance') {
+        const acc = lastAccountInfo || await fetchAccountBalance();
+        if (acc) {
+            res.end(JSON.stringify({ success: true, balance: acc.balance, equity: acc.equity, free_margin: acc.free_margin, currency: acc.currency, leverage: acc.leverage }));
+        } else {
+            res.statusCode = 503;
+            res.end(JSON.stringify({ success: false, error: 'MT5 unavailable' }));
+        }
+    } else {
+        res.statusCode = 404;
+        res.end(JSON.stringify({ error: 'not found' }));
+    }
+});
+
+apiServer.listen(API_PORT, () => log(`API server on port ${API_PORT}`));
+
 // ─── Start ───
 if (process.argv.includes('--test-telegram')) {
     (async () => {

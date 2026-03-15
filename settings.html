@@ -541,7 +541,7 @@
             // Try to fetch balance from executor via nginx proxy
             let text = '✅ Тестовое сообщение от Forex Scanner';
             try {
-                const res = await fetch('/api/account');
+                const res = await fetch('/api/balance');
                 const data = await res.json();
                 if (data.success) {
                     text = [
