@@ -84,24 +84,32 @@ if [ ! -f "/data/wine/.initialized" ]; then
     fi
 
     # ── 4.4 Install MT5 ──
-    log "[4/6] Installing MetaTrader 5 (this takes a few minutes)..."
-    # Run installer with /auto flag for silent install
-    wine /tmp/mt5setup.exe /auto 2>&1 | tail -10 &
+    log "[4/6] Installing MetaTrader 5 (this takes 5-15 minutes)..."
+    log "  mt5setup.exe is a web installer — it downloads ~200MB then installs."
+    # Run installer directly (no pipe — pipe breaks PID tracking)
+    wine /tmp/mt5setup.exe /auto 2>/dev/null &
     MT5_INSTALL_PID=$!
+    log "  Installer PID: $MT5_INSTALL_PID"
 
-    # Wait for installer to finish (max 5 minutes)
+    # Wait for installer to finish (max 15 minutes)
     WAIT_COUNT=0
-    MAX_WAIT=60  # 60 * 5s = 300s = 5 min
+    MAX_WAIT=180  # 180 * 5s = 900s = 15 min
     while kill -0 $MT5_INSTALL_PID 2>/dev/null; do
         WAIT_COUNT=$((WAIT_COUNT + 1))
         if [ $WAIT_COUNT -ge $MAX_WAIT ]; then
-            log "WARNING: MT5 installer still running after 5 minutes, killing..."
+            log "WARNING: MT5 installer still running after 15 minutes, killing..."
             kill $MT5_INSTALL_PID 2>/dev/null || true
             wineserver -k 2>/dev/null || true
             break
         fi
         if [ $((WAIT_COUNT % 12)) -eq 0 ]; then
             ELAPSED=$((WAIT_COUNT * 5))
+            # Check if terminal64.exe appeared (installer might finish before process exits)
+            if find /data/wine -name "terminal64.exe" -type f 2>/dev/null | grep -q .; then
+                log "  terminal64.exe detected at ${ELAPSED}s — MT5 installed!"
+                sleep 10
+                break
+            fi
             log "  ...still installing MT5 (${ELAPSED}s elapsed)"
         fi
         sleep 5
@@ -112,14 +120,22 @@ if [ ! -f "/data/wine/.initialized" ]; then
 
     # ── 4.5 Verify MT5 installation ──
     log "[5/6] Verifying MT5 installation..."
+    # MT5 can install to Program Files OR AppData
     MT5_EXE=$(find /data/wine -name "terminal64.exe" -type f 2>/dev/null | head -1)
     if [ -z "$MT5_EXE" ]; then
         log "WARNING: terminal64.exe not found!"
-        log "Searching for any MT5 files..."
-        find /data/wine -iname "*metatrader*" -o -iname "*terminal*" 2>/dev/null | head -20
+        log "Searching for any MT5/MetaTrader files..."
+        find /data/wine -iname "*metatrader*" -type d 2>/dev/null | head -10
+        find /data/wine -iname "*terminal*" -type f 2>/dev/null | head -10
         log ""
         log "Listing Program Files:"
         ls -la "/data/wine/drive_c/Program Files/" 2>/dev/null || log "(no Program Files)"
+        log ""
+        log "Listing AppData/Roaming:"
+        ls -la "/data/wine/drive_c/users/root/AppData/Roaming/" 2>/dev/null || log "(no AppData)"
+        log ""
+        log "Listing user profile:"
+        ls -la "/data/wine/drive_c/users/" 2>/dev/null || log "(no users)"
         log ""
         log "MT5 may need manual installation via noVNC (port 6080)."
         log "The container will continue running so you can install manually."
