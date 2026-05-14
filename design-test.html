@@ -1,0 +1,656 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Trader — design test</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@200;300;400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --glass-bg: rgba(255,255,255,0.12);
+    --glass-border: rgba(255,255,255,0.22);
+    --text-primary: #fff;
+    --text-secondary: rgba(255,255,255,0.7);
+    --text-muted: rgba(255,255,255,0.5);
+    --accent-up: #4ade80;
+    --accent-down: #f87171;
+    --accent-blue: #60a5fa;
+    --accent-purple: #c084fc;
+  }
+  *,*::before,*::after { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { width: 100%; min-height: 100vh; overflow-x: hidden; }
+  body {
+    font-family: 'Inter', system-ui, -apple-system, sans-serif;
+    color: var(--text-primary);
+    background: #1a1a2e;
+    position: relative;
+    min-height: 100vh;
+    overflow: hidden;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* animated gradient background */
+  .bg {
+    position: fixed;
+    inset: 0;
+    z-index: 0;
+    overflow: hidden;
+    background: linear-gradient(135deg, #2d1b4e 0%, #1e3a5f 30%, #4a3a7a 60%, #2d1b4e 100%);
+  }
+  .blob {
+    position: absolute;
+    border-radius: 50%;
+    filter: blur(90px);
+    opacity: 0.6;
+    animation: float 22s ease-in-out infinite;
+    will-change: transform;
+  }
+  .blob.b1 { width: 620px; height: 620px; background: #6366f1; top: -12%; left: -10%; }
+  .blob.b2 { width: 520px; height: 520px; background: #a855f7; bottom: -12%; right: -10%; animation-delay: -6s; }
+  .blob.b3 { width: 420px; height: 420px; background: #ec4899; top: 25%; right: 18%; animation-delay: -11s; opacity: 0.35; }
+  .blob.b4 { width: 460px; height: 460px; background: #3b82f6; bottom: 18%; left: 20%; animation-delay: -16s; opacity: 0.4; }
+
+  @keyframes float {
+    0%, 100% { transform: translate(0,0) scale(1); }
+    33%       { transform: translate(60px,-40px) scale(1.1); }
+    66%       { transform: translate(-40px,50px) scale(0.95); }
+  }
+
+  /* layout */
+  .stage {
+    position: relative;
+    z-index: 2;
+    width: 100%;
+    min-height: 100vh;
+    padding: 24px 48px;
+  }
+
+  /* header */
+  .header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 32px;
+  }
+  .logo {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-weight: 600;
+    font-size: 18px;
+    letter-spacing: -0.01em;
+  }
+  .logo-mark {
+    width: 34px; height: 34px;
+    background: linear-gradient(135deg, #60a5fa, #c084fc);
+    border-radius: 11px;
+    display: flex; align-items: center; justify-content: center;
+    box-shadow: 0 10px 28px rgba(96,165,250,.45);
+  }
+  .nav {
+    display:flex; gap:28px;
+    font-size:14px; color: var(--text-secondary);
+  }
+  .nav a { color: inherit; text-decoration: none; transition: color .2s; }
+  .nav a:hover { color: #fff; }
+
+  /* hero */
+  .hero {
+    position: relative;
+    height: calc(100vh - 130px);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  /* big title */
+  .hero-title {
+    position: relative;
+    z-index: 3;
+    font-size: clamp(56px, 8.5vw, 132px);
+    font-weight: 300;
+    line-height: 0.96;
+    letter-spacing: -0.045em;
+    text-align: center;
+    color: #fff;
+    text-shadow: 0 6px 50px rgba(0,0,0,0.35);
+    pointer-events: none;
+  }
+  .hero-title .word {
+    display: block;
+    opacity: 0;
+    transform: translateY(40px);
+    animation: rise 1.2s cubic-bezier(.2,.7,.2,1) forwards;
+  }
+  .hero-title .word:nth-child(1) { animation-delay: 0.1s; }
+  .hero-title .word:nth-child(2) { animation-delay: 0.3s; position: relative; z-index: 1; }
+  .hero-title .word:nth-child(3) { animation-delay: 0.5s; }
+  @keyframes rise { to { opacity: 1; transform: translateY(0); } }
+
+  /* central orb (замена 3D-сердцу) */
+  .orb-wrap {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 2;
+  }
+  .orb {
+    width: min(560px, 55vw);
+    height: min(560px, 55vw);
+    border-radius: 50%;
+    background:
+      radial-gradient(circle at 30% 28%, #c4b5fd 0%, #818cf8 25%, #4338ca 55%, #1e1b4b 85%, #0b0820 100%);
+    box-shadow:
+      inset -50px -70px 120px rgba(0,0,0,0.5),
+      inset 30px 40px 70px rgba(255,255,255,0.18),
+      0 70px 140px rgba(99,102,241,0.45),
+      0 0 220px rgba(168,139,250,0.3);
+    position: relative;
+    animation: orbFloat 9s ease-in-out infinite;
+    will-change: transform;
+  }
+  .orb::before {
+    content: '';
+    position: absolute;
+    inset: 6%;
+    border-radius: 50%;
+    background: radial-gradient(circle at 60% 28%, rgba(255,255,255,0.5), transparent 32%);
+    pointer-events: none;
+  }
+  .orb::after {
+    content: '';
+    position: absolute;
+    inset: -2%;
+    border-radius: 50%;
+    background: radial-gradient(circle at 50% 50%, transparent 55%, rgba(168,139,250,0.18) 70%, transparent 80%);
+    pointer-events: none;
+  }
+  .orb svg.orb-chart {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    pointer-events: none;
+  }
+  @keyframes orbFloat {
+    0%,100% { transform: translateY(0) scale(1); }
+    50%     { transform: translateY(-22px) scale(1.02); }
+  }
+
+  /* glass card base */
+  .card {
+    position: absolute;
+    background: var(--glass-bg);
+    backdrop-filter: blur(22px) saturate(180%);
+    -webkit-backdrop-filter: blur(22px) saturate(180%);
+    border: 1px solid var(--glass-border);
+    border-radius: 22px;
+    padding: 14px 18px;
+    box-shadow:
+      0 24px 60px rgba(0,0,0,0.25),
+      inset 0 1px 0 rgba(255,255,255,0.22);
+    z-index: 4;
+    opacity: 0;
+    animation: cardIn 0.9s cubic-bezier(.2,.8,.2,1) forwards;
+    transition: box-shadow .4s, scale .4s cubic-bezier(.2,.8,.2,1);
+    will-change: transform, scale, translate;
+  }
+  .card:hover {
+    scale: 1.035;
+    box-shadow: 0 32px 80px rgba(0,0,0,0.32), inset 0 1px 0 rgba(255,255,255,0.3);
+  }
+  @keyframes cardIn {
+    from { opacity: 0; transform: translateY(24px); scale: 0.94; }
+    to   { opacity: 1; transform: translateY(0);    scale: 1;    }
+  }
+
+  .label {
+    font-size: 11px;
+    color: var(--text-secondary);
+    font-weight: 400;
+    letter-spacing: 0.02em;
+  }
+  .value {
+    font-size: 18px;
+    font-weight: 600;
+    letter-spacing: -0.025em;
+  }
+
+  /* positions */
+  .c1 { top: 8%;  left: 5%;  animation-delay: 0.7s; }
+  .c2 { top: 7%;  left: calc(50% - 100px); animation-delay: 0.9s; }
+  .c3 { top: 12%; right: 5%; animation-delay: 1.1s; }
+  .c4 { top: 46%; left: 2%;  animation-delay: 1.3s; }
+  .c5 { top: 44%; right: 3%; animation-delay: 1.5s; }
+  .c6 { bottom: 6%; left: 16%; animation-delay: 1.7s; }
+  .c7 { bottom: 8%; right: 14%; animation-delay: 1.9s; }
+
+  /* ring card */
+  .ring-card { width: 168px; padding: 16px; }
+  .ring-card .ring-head {
+    display:flex; justify-content:space-between; align-items:center;
+    font-size: 11px; color: var(--text-secondary);
+  }
+  .ring {
+    position: relative;
+    width: 110px; height: 110px;
+    margin: 6px auto 0;
+  }
+  .ring svg { width: 100%; height: 100%; transform: rotate(-90deg); }
+  .ring circle { fill: none; stroke-width: 8; }
+  .ring .track { stroke: rgba(255,255,255,0.15); }
+  .ring .fill {
+    stroke: url(#ringGrad);
+    stroke-linecap: round;
+    stroke-dasharray: 251.2;
+    stroke-dashoffset: 70;
+    animation: ringDraw 2.2s cubic-bezier(.5,0,.5,1) 0.9s both;
+    filter: drop-shadow(0 0 6px rgba(192,132,252,0.5));
+  }
+  .ring-center {
+    position: absolute; inset: 0;
+    display: flex; flex-direction: column;
+    align-items: center; justify-content: center;
+    font-size: 10px; color: var(--text-secondary);
+    text-align: center; line-height: 1.3;
+  }
+  .ring-center b {
+    font-size: 15px; color: #fff;
+    font-weight: 600; letter-spacing: -0.02em;
+    margin-top: 2px;
+  }
+  @keyframes ringDraw { from { stroke-dashoffset: 251.2; } }
+
+  /* mini chart card (top center) */
+  .chart-card { width: 200px; }
+  .chart-card .head-row {
+    display:flex; justify-content:space-between; align-items:center;
+    margin-bottom: 4px;
+  }
+  .tag {
+    font-size: 10px;
+    padding: 2px 8px;
+    border-radius: 8px;
+    background: rgba(74,222,128,0.18);
+    color: var(--accent-up);
+    font-weight: 500;
+  }
+  .spark { width: 100%; height: 36px; margin-top: 4px; }
+  .spark path {
+    fill: none; stroke: var(--accent-up);
+    stroke-width: 2; stroke-linecap: round; stroke-linejoin: round;
+    filter: drop-shadow(0 0 4px rgba(74,222,128,0.5));
+  }
+  .spark path.line {
+    stroke-dasharray: 600;
+    stroke-dashoffset: 600;
+    animation: drawLine 2.2s ease-out 1.1s forwards;
+  }
+  @keyframes drawLine { to { stroke-dashoffset: 0; } }
+
+  /* logo (top right, no glass) */
+  .logo-card {
+    background: transparent !important;
+    border: none !important;
+    box-shadow: none !important;
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+    padding: 4px 0;
+  }
+  .logo-card-inner { display: flex; align-items: center; gap: 10px; }
+  .logo-card-inner span {
+    font-size: 18px; font-weight: 300; letter-spacing: 0.02em;
+  }
+
+  /* analysis pill */
+  .pill-card {
+    display: flex; align-items: center; gap: 12px;
+    border-radius: 60px;
+    padding: 10px 20px 10px 10px;
+  }
+  .pill-icon {
+    width: 38px; height: 38px;
+    border-radius: 50%;
+    background: linear-gradient(135deg, #60a5fa, #c084fc);
+    display:flex; align-items:center; justify-content:center;
+    box-shadow: 0 6px 18px rgba(96,165,250,0.35);
+    flex-shrink: 0;
+  }
+  .pill-card .value { font-size: 16px; }
+
+  /* session card */
+  .session-card {
+    display: flex; align-items: center; gap: 10px;
+    padding: 8px 14px 8px 8px;
+  }
+  .session-avatar {
+    width: 42px; height: 42px;
+    border-radius: 13px;
+    background: linear-gradient(135deg, #34d399, #60a5fa);
+    flex-shrink: 0;
+    position: relative;
+    overflow: hidden;
+  }
+  .session-avatar::after {
+    content: 'B';
+    position: absolute; inset: 0;
+    display:flex; align-items:center; justify-content:center;
+    font-weight: 700; font-size: 18px; color: #fff;
+    text-shadow: 0 2px 8px rgba(0,0,0,0.3);
+  }
+  .session-meta { min-width: 0; }
+  .session-meta .row2 {
+    font-size: 12px; font-weight: 500; margin-top: 2px;
+  }
+  .session-percent {
+    font-size: 18px; font-weight: 600;
+    letter-spacing: -0.03em;
+    background: rgba(255,255,255,0.1);
+    border-radius: 14px;
+    padding: 6px 12px;
+    margin-left: 6px;
+  }
+
+  /* orders card */
+  .orders-card { width: 288px; padding: 14px 16px; }
+  .orders-card .head {
+    display: flex; justify-content: space-between; align-items: center;
+    margin-bottom: 10px;
+  }
+  .orders-card .head b { font-size: 13px; font-weight: 500; }
+  .order-item {
+    display: flex; align-items: center; gap: 10px;
+    padding: 9px 0;
+    border-top: 1px solid rgba(255,255,255,0.08);
+  }
+  .order-icon {
+    width: 36px; height: 36px;
+    border-radius: 11px;
+    display: flex; align-items: center; justify-content: center;
+    font-weight: 700; font-size: 13px;
+    flex-shrink: 0;
+  }
+  .order-meta {
+    flex: 1; min-width: 0;
+    font-size: 11px;
+    color: var(--text-secondary);
+    line-height: 1.4;
+  }
+  .order-meta b {
+    display: block; color: #fff;
+    font-size: 13px; font-weight: 500;
+    margin-bottom: 2px;
+  }
+  .order-pl { font-size: 13px; font-weight: 600; letter-spacing: -0.01em; }
+  .order-pl.up { color: var(--accent-up); }
+  .order-pl.down { color: var(--accent-down); }
+
+  /* schedule card */
+  .schedule-card { width: 268px; padding: 14px 16px; }
+  .schedule-card .sch-head {
+    display: flex; justify-content: space-between; align-items: center;
+    font-size: 11px; color: var(--text-secondary);
+    margin-bottom: 6px;
+  }
+  .schedule-row {
+    display: flex; align-items: center; gap: 12px;
+    padding: 6px 0 4px;
+  }
+  .schedule-time {
+    font-size: 22px; font-weight: 600;
+    letter-spacing: -0.03em;
+  }
+  .schedule-play {
+    width: 42px; height: 42px;
+    border-radius: 13px;
+    background: linear-gradient(135deg, #34d399, #60a5fa);
+    display: flex; align-items: center; justify-content: center;
+    font-size: 14px; color: #fff;
+    box-shadow: 0 6px 18px rgba(52,211,153,0.35);
+  }
+  .schedule-tabs {
+    display: flex; gap: 4px; margin-top: 8px;
+    font-size: 10px;
+  }
+  .schedule-tab {
+    flex: 1; text-align: center;
+    padding: 5px 6px;
+    border-radius: 8px;
+    color: var(--text-muted);
+    transition: background .25s, color .25s;
+    cursor: pointer;
+  }
+  .schedule-tab:hover { color: #fff; }
+  .schedule-tab.active {
+    background: rgba(255,255,255,0.15);
+    color: #fff;
+  }
+
+  /* responsive */
+  @media (max-width: 1000px) {
+    .stage { padding: 16px 20px; }
+    .hero-title { font-size: clamp(44px, 11vw, 80px); }
+    .orb { width: 75vw; height: 75vw; }
+    .c1, .c4 { left: 2%; }
+    .c3, .c5 { right: 2%; }
+    .c6 { left: 6%; }
+    .c7 { right: 4%; }
+  }
+  @media (max-width: 720px) {
+    .c4, .c5 { display: none; }
+    .orders-card, .schedule-card { width: 240px; }
+  }
+</style>
+</head>
+<body>
+
+<div class="bg">
+  <div class="blob b1"></div>
+  <div class="blob b2"></div>
+  <div class="blob b3"></div>
+  <div class="blob b4"></div>
+</div>
+
+<div class="stage">
+  <header class="header">
+    <div class="logo">
+      <div class="logo-mark">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
+          <path d="M3 17l6-6 4 4 8-8" stroke="#fff" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+      </div>
+      Trader
+    </div>
+    <nav class="nav">
+      <a href="#">Scanner</a>
+      <a href="#">Portfolio</a>
+      <a href="#">Settings</a>
+    </nav>
+  </header>
+
+  <section class="hero">
+    <div class="orb-wrap">
+      <div class="orb">
+        <svg class="orb-chart" viewBox="0 0 400 400" xmlns="http://www.w3.org/2000/svg">
+          <defs>
+            <linearGradient id="orbLine" x1="0" y1="0" x2="1" y2="0">
+              <stop offset="0%"   stop-color="#fff" stop-opacity="0.0"/>
+              <stop offset="35%"  stop-color="#fff" stop-opacity="0.85"/>
+              <stop offset="100%" stop-color="#fff" stop-opacity="0.0"/>
+            </linearGradient>
+          </defs>
+          <path d="M50 230 Q 90 190, 130 210 T 210 175 T 290 215 T 360 155"
+                fill="none" stroke="url(#orbLine)" stroke-width="3" stroke-linecap="round"
+                style="filter: drop-shadow(0 0 10px rgba(255,255,255,0.7));"/>
+        </svg>
+      </div>
+    </div>
+
+    <h1 class="hero-title">
+      <span class="word">Алгоритмическая</span>
+      <span class="word">торговля</span>
+      <span class="word">нового уровня</span>
+    </h1>
+
+    <!-- top-left: цель месяца (ring) -->
+    <div class="card ring-card c1">
+      <div class="ring-head">
+        <span>Цель месяца</span>
+        <span style="opacity:0.55;">▾</span>
+      </div>
+      <div class="ring">
+        <svg viewBox="0 0 100 100">
+          <defs>
+            <linearGradient id="ringGrad" x1="0" y1="0" x2="1" y2="1">
+              <stop offset="0%"   stop-color="#60a5fa"/>
+              <stop offset="100%" stop-color="#c084fc"/>
+            </linearGradient>
+          </defs>
+          <circle class="track" cx="50" cy="50" r="40"/>
+          <circle class="fill"  cx="50" cy="50" r="40"/>
+        </svg>
+        <div class="ring-center">
+          <span>Прирост</span>
+          <b>+12.6%</b>
+        </div>
+      </div>
+    </div>
+
+    <!-- top-center: BTC mini-chart -->
+    <div class="card chart-card c2">
+      <div class="head-row">
+        <span class="label">BTC/USDT</span>
+        <span class="tag">+2.4%</span>
+      </div>
+      <div class="value">67 234.50</div>
+      <svg class="spark" viewBox="0 0 200 40" preserveAspectRatio="none">
+        <path class="line" d="M0 28 L20 22 L40 26 L60 18 L80 22 L100 14 L120 16 L140 10 L160 12 L180 8 L200 6"/>
+      </svg>
+    </div>
+
+    <!-- top-right: logo, без стекла -->
+    <div class="card logo-card c3">
+      <div class="logo-card-inner">
+        <svg width="30" height="30" viewBox="0 0 24 24" fill="none">
+          <path d="M12 2.5L13.6 9L20 10.6L13.6 12.2L12 18.5L10.4 12.2L4 10.6L10.4 9L12 2.5Z" fill="#a7f3d0"/>
+        </svg>
+        <span>Trader Pro</span>
+      </div>
+    </div>
+
+    <!-- mid-left: анализ дня -->
+    <div class="card pill-card c4">
+      <div class="pill-icon">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
+          <path d="M3 21V11M9 21V3M15 21V13M21 21V7"
+                stroke="#fff" stroke-width="2.5" stroke-linecap="round"/>
+        </svg>
+      </div>
+      <div>
+        <div class="label">Анализ дня</div>
+        <div class="value">
+          <span id="winRate">67.40</span><span style="font-size:12px;color:var(--accent-up);margin-left:6px;font-weight:500;">+8.1%</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- mid-right: сессия биржи -->
+    <div class="card session-card c5">
+      <div class="session-avatar"></div>
+      <div class="session-meta">
+        <div class="label">Сессия Binance</div>
+        <div class="row2">Активна · 24м назад</div>
+      </div>
+      <div class="session-percent">75%</div>
+    </div>
+
+    <!-- bottom-left: открытые позиции -->
+    <div class="card orders-card c6">
+      <div class="head">
+        <b>Открытые позиции</b>
+        <span class="label">3</span>
+      </div>
+      <div class="order-item">
+        <div class="order-icon" style="background:linear-gradient(135deg,#f59e0b,#ef4444);">B</div>
+        <div class="order-meta">
+          <b>BTC · long</b>
+          0.024 · вход 65 410
+        </div>
+        <div class="order-pl up">+$87</div>
+      </div>
+      <div class="order-item">
+        <div class="order-icon" style="background:linear-gradient(135deg,#6366f1,#06b6d4);">E</div>
+        <div class="order-meta">
+          <b>ETH · long</b>
+          0.85 · вход 3 240
+        </div>
+        <div class="order-pl up">+$42</div>
+      </div>
+    </div>
+
+    <!-- bottom-right: расписание сканера -->
+    <div class="card schedule-card c7">
+      <div class="sch-head">
+        <span>Расписание сканера</span>
+        <span style="opacity:0.55;">All</span>
+      </div>
+      <div class="schedule-row">
+        <div style="flex:1;">
+          <div class="label">Следующий проход</div>
+          <div class="schedule-time">14:30</div>
+        </div>
+        <div class="schedule-play">▶</div>
+      </div>
+      <div class="schedule-tabs">
+        <div class="schedule-tab active">Сегодня</div>
+        <div class="schedule-tab">Завтра</div>
+        <div class="schedule-tab">Неделя</div>
+        <div class="schedule-tab">Месяц</div>
+      </div>
+    </div>
+  </section>
+</div>
+
+<script>
+  // mouse parallax for cards and orb
+  const cards = document.querySelectorAll('.card');
+  const orb   = document.querySelector('.orb');
+
+  let targetX = 0, targetY = 0, curX = 0, curY = 0;
+  document.addEventListener('mousemove', (e) => {
+    targetX = e.clientX / window.innerWidth  - 0.5;
+    targetY = e.clientY / window.innerHeight - 0.5;
+  });
+  function tick() {
+    curX += (targetX - curX) * 0.08;
+    curY += (targetY - curY) * 0.08;
+    cards.forEach((card, i) => {
+      const depth = ((i % 3) + 1) * 8;
+      card.style.translate = (curX * depth).toFixed(2) + 'px ' + (curY * depth).toFixed(2) + 'px';
+    });
+    if (orb) orb.style.translate = (curX * 22).toFixed(2) + 'px ' + (curY * 22).toFixed(2) + 'px';
+    requestAnimationFrame(tick);
+  }
+  requestAnimationFrame(tick);
+
+  // count-up для win-rate
+  const target = document.getElementById('winRate');
+  if (target) {
+    const finalVal = parseFloat(target.textContent);
+    let curr = 0;
+    const step = finalVal / 70;
+    function count() {
+      curr += step;
+      if (curr >= finalVal) { target.textContent = finalVal.toFixed(2); return; }
+      target.textContent = curr.toFixed(2);
+      requestAnimationFrame(count);
+    }
+    setTimeout(() => requestAnimationFrame(count), 1400);
+  }
+</script>
+</body>
+</html>
