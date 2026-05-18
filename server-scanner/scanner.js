@@ -653,7 +653,19 @@ async function execFetch(method, path, body = null) {
     };
     if (body) opts.body = JSON.stringify(body);
     const res = await fetchWithTimeout(`${CONFIG.executorUrl}${path}`, opts);
-    return res.json().catch(() => ({ success: false, error: `HTTP ${res.status}` }));
+    const data = await res.json().catch(() => null);
+    if (data === null) {
+        return { success: false, error: `HTTP ${res.status} (non-JSON body)` };
+    }
+    // Normalize FastAPI error shape ({detail: ...}) into our {success, error}
+    if (!res.ok && data && data.error === undefined) {
+        let detail = data.detail;
+        if (Array.isArray(detail)) {
+            detail = detail.map(d => `${(d.loc || []).join('.')}: ${d.msg}`).join('; ');
+        }
+        return { success: false, error: detail || `HTTP ${res.status}`, http_status: res.status, raw: data };
+    }
+    return data;
 }
 
 async function getPairWinrate(pair, days) {
