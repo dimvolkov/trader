@@ -438,6 +438,202 @@ async def history_mt5(
     }
 
 
+@app.get("/journal")
+async def journal(
+    days: int = Query(30, ge=1, le=365),
+    pair: Optional[str] = None,
+    status: Optional[str] = Query(None, description="filter: placed|filled|cancelled|expired|failed|closed"),
+    x_api_secret: str = Header(None),
+):
+    """
+    Unified order journal: stitches local attempts with MT5 order/deal outcomes.
+    Each row = one placement attempt with its final outcome (filled/cancelled/expired/etc),
+    profit (if closed), close price, and the originating signal context.
+    Also includes pending_failed and pending_rejected attempts that never reached MT5.
+    """
+    require_auth(x_api_secret)
+
+    from_ts = int((datetime.now(timezone.utc) - timedelta(days=days)).timestamp())
+    symbol = pair_to_mt5_symbol(pair) if pair else None
+    mt5_orders = mt5_bridge.get_history_orders(from_ts, symbol=symbol).get("orders", [])
+    mt5_deals = mt5_bridge.get_history_deals(from_ts, symbol=symbol).get("deals", [])
+    log_recs = read_trade_log(days=days, pair=pair)
+
+    # Index MT5 data by ticket / position_id
+    orders_by_ticket = {o["ticket"]: o for o in mt5_orders}
+    deals_by_position = {}
+    for d in mt5_deals:
+        deals_by_position.setdefault(d.get("position_id"), []).append(d)
+
+    # Index cancellations from local log (reason, watcher cause)
+    cancellations_by_ticket = {}
+    for r in log_recs:
+        if r.get("action") == "pending_cancelled" and r.get("ticket"):
+            cancellations_by_ticket[r["ticket"]] = r
+
+    rows = []
+    seen_tickets = set()
+
+    def _outcome_from_order(ticket: int):
+        """Return (status, position_id) from MT5 order state."""
+        o = orders_by_ticket.get(ticket)
+        if not o:
+            return ("unknown", None)
+        st = o.get("state")
+        return (ORDER_STATE_NAMES.get(st, str(st)), o.get("position_id"))
+
+    def _profit_from_position(position_id):
+        """Return (profit, close_price, close_time, in_deal) for a position."""
+        if not position_id:
+            return (None, None, None, None)
+        deals = deals_by_position.get(position_id, [])
+        in_deal = next((d for d in deals if d.get("entry") == 0), None)
+        out_deal = next((d for d in deals if d.get("entry") == 1), None)
+        if out_deal:
+            return (
+                round(out_deal["profit"] + out_deal.get("swap", 0) + out_deal.get("commission", 0), 2),
+                out_deal["price"],
+                out_deal["time"],
+                in_deal,
+            )
+        return (None, None, None, in_deal)
+
+    # Walk local attempts (pending and market)
+    for r in log_recs:
+        action = r.get("action")
+        if action not in ("pending_placed", "market_open", "pending_failed", "pending_rejected"):
+            continue
+        ticket = r.get("ticket") or (r.get("result") or {}).get("order_id")
+        if action == "pending_failed" or action == "pending_rejected" or not ticket:
+            rows.append({
+                "timestamp": r.get("timestamp"),
+                "pair": r.get("pair"),
+                "kind": "pending" if action.startswith("pending") else "market",
+                "direction": r.get("direction"),
+                "entry": r.get("entry"),
+                "stop": r.get("stop"),
+                "take": r.get("take"),
+                "rr": r.get("rr"),
+                "volume": r.get("volume"),
+                "ticket": ticket,
+                "status": "failed" if action != "pending_rejected" else "rejected",
+                "reason": r.get("reason") or (r.get("result") or {}).get("error"),
+                "profit": None,
+                "close_price": None,
+                "close_time": None,
+                "signal_context": r.get("signal_context"),
+                "attempt_id": r.get("attempt_id"),
+            })
+            continue
+
+        seen_tickets.add(ticket)
+        status, position_id = _outcome_from_order(ticket)
+        if action == "market_open":
+            # Market orders are filled immediately; if position_id missing, fall back
+            if not position_id:
+                position_id = ticket
+            if status == "unknown":
+                status = "filled"
+        profit, close_price, close_time, in_deal = _profit_from_position(position_id)
+
+        # Refine status if position is fully closed
+        if profit is not None:
+            status = "closed"
+
+        cancel_rec = cancellations_by_ticket.get(ticket)
+
+        rows.append({
+            "timestamp": r.get("timestamp"),
+            "pair": r.get("pair"),
+            "kind": "pending" if action == "pending_placed" else "market",
+            "direction": r.get("direction"),
+            "entry": r.get("entry"),
+            "stop": r.get("stop"),
+            "take": r.get("take"),
+            "rr": r.get("rr"),
+            "volume": r.get("volume"),
+            "ticket": ticket,
+            "status": status,
+            "reason": (cancel_rec or {}).get("reason") if status == "cancelled" else None,
+            "fill_price": in_deal.get("price") if in_deal else None,
+            "fill_time": in_deal.get("time") if in_deal else None,
+            "profit": profit,
+            "close_price": close_price,
+            "close_time": close_time,
+            "signal_context": r.get("signal_context"),
+            "attempt_id": r.get("attempt_id"),
+        })
+
+    # Also include MT5 orders that exist but were never logged locally
+    # (e.g. manual orders placed in MT5 terminal directly)
+    for o in mt5_orders:
+        if o["ticket"] in seen_tickets:
+            continue
+        status, position_id = _outcome_from_order(o["ticket"])
+        profit, close_price, close_time, in_deal = _profit_from_position(position_id)
+        if profit is not None:
+            status = "closed"
+
+        # Determine direction & kind from MT5 type
+        type_name = o.get("type_name", "")
+        is_pending = "limit" in type_name or "stop" in type_name
+        direction = "buy" if "buy" in type_name else ("sell" if "sell" in type_name else None)
+
+        # Timestamp from MT5 time_setup
+        ts = None
+        if o.get("time_setup"):
+            ts = datetime.fromtimestamp(o["time_setup"], tz=timezone.utc).isoformat()
+
+        rows.append({
+            "timestamp": ts,
+            "pair": o["symbol"],
+            "kind": "pending" if is_pending else "market",
+            "direction": direction,
+            "entry": o.get("price_open"),
+            "stop": o.get("sl"),
+            "take": o.get("tp"),
+            "rr": None,
+            "volume": o.get("volume_initial"),
+            "ticket": o["ticket"],
+            "status": status,
+            "reason": "external/manual" if o.get("magic") not in (mt5_bridge.MAGIC_MARKET, mt5_bridge.MAGIC_PENDING) else None,
+            "fill_price": in_deal.get("price") if in_deal else None,
+            "fill_time": in_deal.get("time") if in_deal else None,
+            "profit": profit,
+            "close_price": close_price,
+            "close_time": close_time,
+            "signal_context": None,
+            "attempt_id": None,
+            "source": "mt5_only",
+        })
+
+    # Sort: newest first
+    rows.sort(key=lambda r: r.get("timestamp") or "", reverse=True)
+
+    if status:
+        rows = [r for r in rows if r["status"] == status]
+
+    # Summary
+    total = len(rows)
+    closed = [r for r in rows if r["status"] == "closed"]
+    wins = [r for r in closed if (r["profit"] or 0) > 0]
+    summary = {
+        "total_attempts": total,
+        "placed": sum(1 for r in rows if r["status"] == "placed"),
+        "filled": sum(1 for r in rows if r["status"] == "filled"),
+        "closed": len(closed),
+        "wins": len(wins),
+        "losses": len(closed) - len(wins),
+        "winrate": round(len(wins) / len(closed), 3) if closed else 0.0,
+        "total_profit": round(sum(r["profit"] or 0 for r in closed), 2),
+        "cancelled": sum(1 for r in rows if r["status"] == "cancelled"),
+        "expired": sum(1 for r in rows if r["status"] == "expired"),
+        "failed": sum(1 for r in rows if r["status"] in ("failed", "rejected")),
+    }
+
+    return {"success": True, "summary": summary, "rows": rows}
+
+
 def _stats_for_deals(deals: List[dict]) -> Dict[str, Any]:
     """Compute winrate, totals from a list of deals (only 'out' deals carry profit)."""
     outs = [d for d in deals if d.get("entry") == 1]   # entry=1 → out (closing)

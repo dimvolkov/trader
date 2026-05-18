@@ -1141,6 +1141,11 @@ const apiServer = http.createServer(async (req, res) => {
             const qs = parsed.search || '';
             return proxyExecutor(req, res, `/history${qs}`);
         }
+        if (p === '/api/journal' && req.method === 'GET') {
+            if (!requireAdmin(req)) return reply(res, 401, { success: false, error: 'admin secret required' });
+            const qs = parsed.search || '';
+            return proxyExecutor(req, res, `/journal${qs}`);
+        }
 
         return reply(res, 404, { error: 'not found' });
     } catch (err) {

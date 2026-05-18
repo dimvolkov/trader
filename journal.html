@@ -1,0 +1,421 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Журнал ордеров — Forex</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            background: #131722;
+            color: #d1d4dc;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            min-height: 100vh;
+        }
+        .header {
+            display: flex; align-items: center; justify-content: space-between;
+            padding: 12px 20px;
+            background: #1e222d;
+            border-bottom: 1px solid #2a2e39;
+        }
+        .header-left { display: flex; align-items: center; gap: 16px; }
+        .header-left h1 { font-size: 18px; font-weight: 700; color: #fff; }
+        .header-left a { color: #2962ff; text-decoration: none; font-size: 13px; }
+        .header-left a:hover { text-decoration: underline; }
+        .content { max-width: 1400px; margin: 0 auto; padding: 20px; }
+
+        .summary {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+            gap: 10px;
+            margin-bottom: 20px;
+        }
+        .stat {
+            background: #1e222d;
+            border: 1px solid #2a2e39;
+            border-radius: 6px;
+            padding: 12px 14px;
+        }
+        .stat-label { font-size: 11px; color: #787b86; text-transform: uppercase; }
+        .stat-value { font-size: 22px; font-weight: 700; color: #fff; margin-top: 4px; }
+        .stat-positive { color: #26a69a; }
+        .stat-negative { color: #ef5350; }
+
+        .filters {
+            background: #1e222d;
+            border: 1px solid #2a2e39;
+            border-radius: 6px;
+            padding: 12px 14px;
+            margin-bottom: 16px;
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+            align-items: end;
+        }
+        .filter-group { display: flex; flex-direction: column; gap: 4px; }
+        .filter-label { font-size: 11px; color: #787b86; }
+        .filter-input, .filter-select {
+            background: #2a2e39;
+            color: #fff;
+            border: 1px solid #363a45;
+            padding: 6px 10px;
+            border-radius: 4px;
+            font-size: 13px;
+            font-family: monospace;
+            outline: none;
+            min-width: 100px;
+        }
+        .filter-input:focus, .filter-select:focus { border-color: #2962ff; }
+        .btn {
+            background: #2962ff;
+            color: #fff;
+            border: 1px solid #2962ff;
+            padding: 7px 14px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 13px;
+        }
+        .btn:hover { background: #1e4fd6; }
+        .btn-secondary {
+            background: #2a2e39;
+            border-color: #363a45;
+            color: #d1d4dc;
+        }
+        .btn-secondary:hover { background: #363a45; }
+
+        .table-wrap {
+            background: #1e222d;
+            border: 1px solid #2a2e39;
+            border-radius: 6px;
+            overflow-x: auto;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 12px;
+            font-family: monospace;
+        }
+        thead {
+            background: #161a25;
+            position: sticky;
+            top: 0;
+        }
+        th {
+            text-align: left;
+            padding: 10px 8px;
+            color: #787b86;
+            font-weight: 600;
+            text-transform: uppercase;
+            font-size: 10px;
+            letter-spacing: 0.5px;
+            border-bottom: 1px solid #2a2e39;
+            white-space: nowrap;
+        }
+        td {
+            padding: 8px;
+            border-bottom: 1px solid #2a2e39;
+            white-space: nowrap;
+        }
+        tr:hover { background: #1a1e2a; }
+        tr.expanded-row { background: #1a1e2a; }
+        .ctx-cell { padding: 12px 18px !important; white-space: pre-wrap; font-size: 11px; color: #9aa0a8; }
+
+        .badge {
+            display: inline-block;
+            padding: 2px 8px;
+            border-radius: 10px;
+            font-size: 10px;
+            font-weight: 700;
+            text-transform: uppercase;
+        }
+        .b-placed   { background: rgba(41,98,255,0.2);  color: #2962ff; }
+        .b-filled   { background: rgba(255,152,0,0.2);  color: #ff9800; }
+        .b-closed   { background: rgba(120,123,134,0.2); color: #787b86; }
+        .b-cancelled{ background: rgba(120,123,134,0.2); color: #787b86; }
+        .b-expired  { background: rgba(120,123,134,0.2); color: #787b86; }
+        .b-failed   { background: rgba(239,83,80,0.2);  color: #ef5350; }
+        .b-rejected { background: rgba(239,83,80,0.2);  color: #ef5350; }
+        .b-unknown  { background: rgba(120,123,134,0.2); color: #787b86; }
+
+        .b-buy  { background: rgba(38,166,154,0.2); color: #26a69a; }
+        .b-sell { background: rgba(239,83,80,0.2);  color: #ef5350; }
+        .b-up   { background: rgba(38,166,154,0.2); color: #26a69a; }
+        .b-down { background: rgba(239,83,80,0.2);  color: #ef5350; }
+
+        .b-pending { background: rgba(41,98,255,0.15); color: #2962ff; }
+        .b-market  { background: rgba(255,152,0,0.15); color: #ff9800; }
+
+        .p-pos { color: #26a69a; font-weight: 700; }
+        .p-neg { color: #ef5350; font-weight: 700; }
+        .muted { color: #4a4e59; }
+
+        .toggle { cursor: pointer; color: #787b86; user-select: none; }
+        .toggle:hover { color: #fff; }
+
+        .error {
+            background: rgba(239,83,80,0.15);
+            border: 1px solid #ef5350;
+            border-radius: 6px;
+            padding: 12px 16px;
+            color: #ef5350;
+            margin-bottom: 16px;
+        }
+        .empty {
+            text-align: center;
+            color: #787b86;
+            padding: 40px 20px;
+            font-size: 13px;
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <div class="header-left">
+            <h1>Журнал ордеров</h1>
+            <a href="index.html">&larr; График</a>
+            <a href="scanner.html">Сканер</a>
+            <a href="settings.html">Настройки</a>
+        </div>
+    </div>
+
+    <div class="content">
+        <div id="errorBox"></div>
+
+        <div class="summary" id="summary"></div>
+
+        <div class="filters">
+            <div class="filter-group">
+                <label class="filter-label">Период (дней)</label>
+                <input type="number" class="filter-input" id="days" value="30" min="1" max="365">
+            </div>
+            <div class="filter-group">
+                <label class="filter-label">Пара</label>
+                <input type="text" class="filter-input" id="pair" placeholder="EUR/USD или пусто">
+            </div>
+            <div class="filter-group">
+                <label class="filter-label">Статус</label>
+                <select class="filter-select" id="status">
+                    <option value="">Все</option>
+                    <option value="placed">Placed (активен)</option>
+                    <option value="filled">Filled (исполнен)</option>
+                    <option value="closed">Closed (закрыт)</option>
+                    <option value="cancelled">Cancelled</option>
+                    <option value="expired">Expired</option>
+                    <option value="failed">Failed</option>
+                    <option value="rejected">Rejected</option>
+                </select>
+            </div>
+            <div class="filter-group">
+                <label class="filter-label">Тип</label>
+                <select class="filter-select" id="kind">
+                    <option value="">Все</option>
+                    <option value="pending">Pending</option>
+                    <option value="market">Market</option>
+                </select>
+            </div>
+            <button class="btn" onclick="loadJournal()">Обновить</button>
+            <button class="btn btn-secondary" onclick="exportCSV()">Экспорт CSV</button>
+        </div>
+
+        <div class="table-wrap">
+            <table id="journalTable">
+                <thead>
+                    <tr>
+                        <th></th>
+                        <th>Время</th>
+                        <th>Пара</th>
+                        <th>Тип</th>
+                        <th>Напр.</th>
+                        <th>Entry</th>
+                        <th>SL</th>
+                        <th>TP</th>
+                        <th>R:R</th>
+                        <th>Объём</th>
+                        <th>Тикет</th>
+                        <th>Статус</th>
+                        <th>Fill цена</th>
+                        <th>Close цена</th>
+                        <th>Профит</th>
+                        <th>Причина / Заметка</th>
+                    </tr>
+                </thead>
+                <tbody id="journalBody">
+                    <tr><td colspan="16" class="empty">Введите admin secret в настройках и нажмите «Обновить»</td></tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <script>
+    let lastRows = [];
+
+    function adminSecret() {
+        return localStorage.getItem('scannerAdminSecret') || '';
+    }
+
+    function showError(msg) {
+        const box = document.getElementById('errorBox');
+        box.innerHTML = msg ? `<div class="error">${msg}</div>` : '';
+    }
+
+    function fmtTime(iso) {
+        if (!iso) return '<span class="muted">—</span>';
+        const d = new Date(iso);
+        if (isNaN(d.getTime())) return iso;
+        const pad = n => String(n).padStart(2, '0');
+        return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+    }
+    function fmtUnix(t) {
+        if (!t) return '<span class="muted">—</span>';
+        return fmtTime(new Date(t * 1000).toISOString());
+    }
+    function fmtNum(v, digits = 5) {
+        if (v === null || v === undefined || v === '') return '<span class="muted">—</span>';
+        if (typeof v !== 'number') return v;
+        return v.toFixed(digits);
+    }
+    function fmtProfit(v) {
+        if (v === null || v === undefined) return '<span class="muted">—</span>';
+        const cls = v >= 0 ? 'p-pos' : 'p-neg';
+        return `<span class="${cls}">${v.toFixed(2)}</span>`;
+    }
+    function badge(value, prefix = 'b-') {
+        if (!value) return '<span class="muted">—</span>';
+        const cls = prefix + value.toLowerCase().replace(/[^a-z]/g, '');
+        return `<span class="badge ${cls}">${value}</span>`;
+    }
+    function escapeHtml(s) {
+        if (s === null || s === undefined) return '';
+        return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":"&#39;"}[c]));
+    }
+
+    function renderSummary(s) {
+        const tiles = [
+            ['Всего попыток', s.total_attempts, ''],
+            ['Активных (placed)', s.placed, ''],
+            ['Исполнено (filled)', s.filled, ''],
+            ['Закрыто', s.closed, ''],
+            ['Wins / Losses', `${s.wins} / ${s.losses}`, ''],
+            ['Winrate', `${(s.winrate * 100).toFixed(0)}%`, ''],
+            ['Профит', s.total_profit.toFixed(2),
+             s.total_profit > 0 ? 'positive' : (s.total_profit < 0 ? 'negative' : '')],
+            ['Cancelled', s.cancelled, ''],
+            ['Expired', s.expired, ''],
+            ['Failed', s.failed, ''],
+        ];
+        document.getElementById('summary').innerHTML = tiles.map(([l, v, k]) => `
+            <div class="stat">
+                <div class="stat-label">${l}</div>
+                <div class="stat-value ${k ? 'stat-' + k : ''}">${v}</div>
+            </div>
+        `).join('');
+    }
+
+    function applyClientFilter(rows) {
+        const kind = document.getElementById('kind').value;
+        if (!kind) return rows;
+        return rows.filter(r => r.kind === kind);
+    }
+
+    function renderRows(rows) {
+        const tbody = document.getElementById('journalBody');
+        if (!rows.length) {
+            tbody.innerHTML = '<tr><td colspan="16" class="empty">Нет данных за выбранный период</td></tr>';
+            return;
+        }
+        tbody.innerHTML = rows.map((r, i) => {
+            const dir = r.direction ? r.direction.toLowerCase() : '';
+            return `
+                <tr data-idx="${i}">
+                    <td><span class="toggle" onclick="toggleCtx(${i})">${r.signal_context ? '▸' : ''}</span></td>
+                    <td>${fmtTime(r.timestamp)}</td>
+                    <td><strong>${escapeHtml(r.pair || '')}</strong></td>
+                    <td>${badge(r.kind)}</td>
+                    <td>${badge(dir === 'up' || dir === 'buy' ? 'buy' : (dir === 'down' || dir === 'sell' ? 'sell' : dir))}</td>
+                    <td>${fmtNum(r.entry)}</td>
+                    <td>${fmtNum(r.stop)}</td>
+                    <td>${fmtNum(r.take)}</td>
+                    <td>${r.rr ? r.rr.toFixed(2) : '<span class="muted">—</span>'}</td>
+                    <td>${fmtNum(r.volume, 2)}</td>
+                    <td>${r.ticket || '<span class="muted">—</span>'}</td>
+                    <td>${badge(r.status)}</td>
+                    <td>${fmtNum(r.fill_price)}</td>
+                    <td>${fmtNum(r.close_price)}</td>
+                    <td>${fmtProfit(r.profit)}</td>
+                    <td>${escapeHtml(r.reason || '')}</td>
+                </tr>
+                ${r.signal_context ? `
+                    <tr id="ctx-${i}" style="display:none">
+                        <td colspan="16" class="ctx-cell">${escapeHtml(JSON.stringify(r.signal_context, null, 2))}</td>
+                    </tr>
+                ` : ''}
+            `;
+        }).join('');
+    }
+
+    window.toggleCtx = function(i) {
+        const row = document.getElementById('ctx-' + i);
+        if (!row) return;
+        const visible = row.style.display !== 'none';
+        row.style.display = visible ? 'none' : 'table-row';
+        const tr = document.querySelector(`tr[data-idx="${i}"]`);
+        const tog = tr.querySelector('.toggle');
+        if (tog) tog.textContent = visible ? '▸' : '▾';
+        if (tr) tr.classList.toggle('expanded-row', !visible);
+    };
+
+    window.loadJournal = async function() {
+        if (!adminSecret()) {
+            showError('Не задан admin secret. Перейди в <a href="settings.html" style="color:#2962ff">настройки</a>, введи его и сохрани.');
+            return;
+        }
+        showError('');
+        const days = document.getElementById('days').value || 30;
+        const pair = document.getElementById('pair').value.trim();
+        const status = document.getElementById('status').value;
+        const params = new URLSearchParams({ days });
+        if (pair) params.set('pair', pair);
+        if (status) params.set('status', status);
+        try {
+            const res = await fetch('/api/journal?' + params.toString(), {
+                headers: { 'X-Admin-Secret': adminSecret() },
+            });
+            const data = await res.json();
+            if (!data.success) {
+                showError('Ошибка: ' + (data.error || 'fail'));
+                return;
+            }
+            lastRows = data.rows || [];
+            renderSummary(data.summary);
+            renderRows(applyClientFilter(lastRows));
+        } catch (err) {
+            showError('Сеть: ' + err.message);
+        }
+    };
+
+    window.exportCSV = function() {
+        if (!lastRows.length) return;
+        const cols = ['timestamp','pair','kind','direction','entry','stop','take','rr','volume','ticket','status','fill_price','close_price','profit','reason'];
+        const header = cols.join(',');
+        const lines = lastRows.map(r => cols.map(c => {
+            const v = r[c];
+            if (v === null || v === undefined) return '';
+            const s = String(v).replace(/"/g, '""');
+            return /[",\n]/.test(s) ? `"${s}"` : s;
+        }).join(','));
+        const csv = [header, ...lines].join('\n');
+        const blob = new Blob([csv], { type: 'text/csv' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `journal_${new Date().toISOString().slice(0,10)}.csv`;
+        a.click();
+        URL.revokeObjectURL(url);
+    };
+
+    document.getElementById('kind').addEventListener('change', () => renderRows(applyClientFilter(lastRows)));
+
+    loadJournal();
+    </script>
+</body>
+</html>
