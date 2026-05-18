@@ -108,8 +108,13 @@ def read_trade_log(days: int = 30, pair: Optional[str] = None, action: Optional[
 
 # ─── Helper ───
 def pair_to_mt5_symbol(pair: str) -> str:
-    """Convert 'EUR/USD' to 'EURUSD' format for MT5."""
-    return pair.replace("/", "")
+    """Convert 'EUR/USD' to the broker-specific MT5 symbol name.
+
+    Strips the slash and then asks mt5_bridge to resolve any broker suffix
+    (e.g. Alfa-Forex uses 'rfd' → USDCHFrfd). Result is cached in
+    mt5_bridge, so this is cheap on repeat calls.
+    """
+    return mt5_bridge.resolve_symbol(pair.replace("/", ""))
 
 
 def calculate_volume(

@@ -4,6 +4,7 @@ Handles order execution, position management, account info, history.
 """
 
 import logging
+import os
 from datetime import datetime, timezone
 
 import MetaTrader5 as mt5
@@ -14,6 +15,12 @@ logger = logging.getLogger("mt5_bridge")
 MAGIC_MARKET = 123456
 MAGIC_PENDING = 123457
 
+# Some brokers append a suffix to symbol names (e.g. Alfa-Forex uses "rfd":
+# USDCHFrfd, EURUSDrfd). If set, it's tried before broker-wide search.
+SYMBOL_SUFFIX = os.getenv("MT5_SYMBOL_SUFFIX", "")
+
+_symbol_cache: dict = {}
+
 
 def _ensure_initialized() -> bool:
     """Initialize MT5 connection if not already connected."""
@@ -22,6 +29,53 @@ def _ensure_initialized() -> bool:
             logger.error(f"MT5 initialize failed: {mt5.last_error()}")
             return False
     return True
+
+
+def resolve_symbol(base: str) -> str:
+    """Return the actual MT5 symbol name for a bare pair like 'USDCHF'.
+
+    Strategy:
+      1. Cache hit
+      2. Exact name `base`
+      3. `base + SYMBOL_SUFFIX` (from MT5_SYMBOL_SUFFIX env)
+      4. `mt5.symbols_get("*base*")` and pick the shortest match
+    Returns the resolved name if found and selectable, otherwise returns
+    `base` unchanged so downstream sees a clear "Cannot select" error.
+    """
+    if base in _symbol_cache:
+        return _symbol_cache[base]
+    if not _ensure_initialized():
+        return base
+
+    candidates = [base]
+    if SYMBOL_SUFFIX and (base + SYMBOL_SUFFIX) not in candidates:
+        candidates.append(base + SYMBOL_SUFFIX)
+
+    for c in candidates:
+        if mt5.symbol_select(c, True):
+            _symbol_cache[base] = c
+            return c
+
+    # Pattern search across all broker symbols
+    try:
+        found = mt5.symbols_get(f"*{base}*") or []
+    except Exception:
+        found = []
+    best = None
+    for s in found:
+        name = s.name
+        if name == base:
+            best = name
+            break
+        if best is None or len(name) < len(best):
+            best = name
+    if best and mt5.symbol_select(best, True):
+        _symbol_cache[base] = best
+        logger.info(f"resolve_symbol: {base} → {best} (broker suffix detected)")
+        return best
+
+    logger.warning(f"resolve_symbol: no match for {base}")
+    return base
 
 
 def account_info() -> dict:
