@@ -6,6 +6,7 @@
     <title>Forex Chart</title>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
+        html, body { overflow: hidden; }
         body {
             background: #131722;
             color: #d1d4dc;
@@ -316,9 +317,14 @@
             visible: false,
         });
 
-        // Resize
+        // Resize — обёрнуто в rAF, чтобы избежать ResizeObserver-петли (дрожания)
+        let resizeRaf = 0;
         const ro = new ResizeObserver(() => {
-            chart.applyOptions({ width: container.clientWidth, height: container.clientHeight });
+            if (resizeRaf) return;
+            resizeRaf = requestAnimationFrame(() => {
+                resizeRaf = 0;
+                chart.applyOptions({ width: container.clientWidth, height: container.clientHeight });
+            });
         });
         ro.observe(container);
 
