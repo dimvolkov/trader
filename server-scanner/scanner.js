@@ -1147,6 +1147,64 @@ const apiServer = http.createServer(async (req, res) => {
             return proxyExecutor(req, res, `/journal${qs}`);
         }
 
+        // ─── Test pending order: synthetic signal near current market ───
+        if (p === '/api/test-pending' && req.method === 'POST') {
+            if (!requireAdmin(req)) return reply(res, 401, { success: false, error: 'admin secret required' });
+            if (!CONFIG.executorUrl || !CONFIG.executorSecret) {
+                return reply(res, 503, { success: false, error: 'Executor not configured' });
+            }
+            let body = {};
+            try { body = await jsonBody(req); } catch {}
+            const pair = body.pair || 'EUR/USD';
+            const dirIn = String(body.direction || 'down').toLowerCase();
+            const direction = (dirIn === 'up' || dirIn === 'buy' || dirIn === 'long') ? 'up' : 'down';
+            const volume = (typeof body.volume === 'number' && body.volume > 0) ? body.volume : 0.01;
+            const distPips = typeof body.distance_pips === 'number' ? body.distance_pips : 10;
+            const slPips = typeof body.sl_pips === 'number' ? body.sl_pips : 20;
+            const tpPips = typeof body.tp_pips === 'number' ? body.tp_pips : 60;
+
+            const market = await getCurrentMarketPrice(pair);
+            if (!market) return reply(res, 502, { success: false, error: 'no market price (executor or symbol unavailable)' });
+
+            const pip = pair.includes('JPY') ? 0.01 : 0.0001;
+            const decimals = pair.includes('JPY') ? 3 : 5;
+            const round = (v) => +v.toFixed(decimals);
+            let entry, stop, take;
+            if (direction === 'up') {
+                entry = round(market.bid - distPips * pip);
+                stop = round(entry - slPips * pip);
+                take = round(entry + tpPips * pip);
+            } else {
+                entry = round(market.ask + distPips * pip);
+                stop = round(entry + slPips * pip);
+                take = round(entry - tpPips * pip);
+            }
+            const rr = +(Math.abs(take - entry) / Math.abs(stop - entry)).toFixed(2);
+            const pc = pendingConfig.get();
+            const payload = {
+                pair, direction, entry, stop, take, rr,
+                volume,
+                deposit: CONFIG.deposit,
+                risk_pct: CONFIG.riskPct,
+                pending_type: pc.pending_type,
+                ttl_hours: pc.ttl_hours,
+                signal_context: {
+                    test: true,
+                    market_bid: market.bid,
+                    market_ask: market.ask,
+                    note: 'synthetic test pending — not a real signal',
+                },
+                config_snapshot: { ...pc, test_mode: true },
+            };
+            try {
+                const data = await execFetch('POST', '/pending', payload);
+                log(`  TEST PENDING ${pair} ${direction}: entry=${entry} stop=${stop} take=${take} vol=${volume} → ${data.success ? `OK ticket=${data.ticket}` : `FAIL ${data.error}`}`);
+                return reply(res, 200, { request: payload, response: data });
+            } catch (err) {
+                return reply(res, 502, { success: false, error: err.message });
+            }
+        }
+
         return reply(res, 404, { error: 'not found' });
     } catch (err) {
         return reply(res, 500, { success: false, error: err.message });
