@@ -497,6 +497,47 @@
 
             <div class="source-card">
                 <div class="source-header">
+                    <span class="source-name">Тестовый pending</span>
+                    <span class="source-badge badge-empty">DEBUG</span>
+                </div>
+                <div class="source-info">
+                    Синтетический ордер у текущей рыночной цены — для проверки связки scanner → executor → MT5 без ожидания реального паттерна «Слом».
+                </div>
+                <div class="field-row">
+                    <div class="field-label">Пара</div>
+                    <input type="text" class="field-input" id="testPendingPair" value="EUR/USD">
+                </div>
+                <div class="field-row">
+                    <div class="field-label">Направление</div>
+                    <select class="field-select" id="testPendingDir">
+                        <option value="down">SELL (LIMIT выше рынка)</option>
+                        <option value="up">BUY (LIMIT ниже рынка)</option>
+                    </select>
+                </div>
+                <div class="field-row">
+                    <div class="field-label">Объём (лот)</div>
+                    <input type="number" class="field-input" id="testPendingVol" value="0.01" min="0.01" step="0.01">
+                </div>
+                <div class="field-row">
+                    <div class="field-label">Entry от рынка (пипсы)</div>
+                    <input type="number" class="field-input" id="testPendingDist" value="10" min="1" step="1">
+                </div>
+                <div class="field-row">
+                    <div class="field-label">SL от entry (пипсы)</div>
+                    <input type="number" class="field-input" id="testPendingSL" value="20" min="1" step="1">
+                </div>
+                <div class="field-row">
+                    <div class="field-label">TP от entry (пипсы)</div>
+                    <input type="number" class="field-input" id="testPendingTP" value="60" min="1" step="1">
+                </div>
+                <div class="btn-row">
+                    <button class="btn btn-test" id="testPendingBtn" onclick="pcTestPending()">Разместить тестовый</button>
+                </div>
+                <div class="test-result" id="testPendingResult"></div>
+            </div>
+
+            <div class="source-card">
+                <div class="source-header">
                     <span class="source-name">Активные pending</span>
                     <span>
                         <button class="btn btn-test" onclick="pcLoadActivePending()">Обновить</button>
@@ -1032,6 +1073,42 @@
                     `).join('')}</tbody>
                 </table>
             `;
+        };
+
+        window.pcTestPending = async function () {
+            const btn = document.getElementById('testPendingBtn');
+            const out = document.getElementById('testPendingResult');
+            const payload = {
+                pair: document.getElementById('testPendingPair').value.trim() || 'EUR/USD',
+                direction: document.getElementById('testPendingDir').value,
+                volume: parseFloat(document.getElementById('testPendingVol').value) || 0.01,
+                distance_pips: parseFloat(document.getElementById('testPendingDist').value) || 10,
+                sl_pips: parseFloat(document.getElementById('testPendingSL').value) || 20,
+                tp_pips: parseFloat(document.getElementById('testPendingTP').value) || 60,
+            };
+            btn.disabled = true;
+            pcShow(out, 'Размещаем...', 'loading');
+            try {
+                const r = await pcFetch('/api/test-pending', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload),
+                });
+                const resp = r.response || {};
+                if (resp.success) {
+                    const req = r.request || {};
+                    out.innerHTML = `<span class="test-ok">OK — ticket ${resp.ticket}, type ${resp.order_type || '?'}, `
+                        + `entry ${req.entry}, SL ${req.stop}, TP ${req.take}, vol ${req.volume}</span>`;
+                    pcLoadActivePending();
+                } else {
+                    const err = resp.error || r.error || 'fail';
+                    out.innerHTML = `<span class="test-fail">FAIL — ${err}</span>`;
+                }
+            } catch (err) {
+                out.innerHTML = `<span class="test-fail">Сеть: ${err.message}</span>`;
+            } finally {
+                btn.disabled = false;
+            }
         };
 
         window.pcCancelPending = async function (ticket) {
