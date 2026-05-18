@@ -274,6 +274,33 @@
             line-height: 1;
         }
         .chart-btn:hover { opacity: 1; background: transparent; }
+        .place-action-bar {
+            display: flex;
+            align-items: center;
+            gap: 14px;
+            margin-top: 12px;
+            padding: 10px 14px;
+            background: #131722;
+            border: 1px solid #2a2e39;
+            border-radius: 6px;
+        }
+        .btn-place-pending {
+            background: #2962ff;
+            color: #fff;
+            border: none;
+            border-radius: 4px;
+            padding: 8px 16px;
+            font-size: 13px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+        .btn-place-pending:hover:not(:disabled) { background: #1e53e5; }
+        .btn-place-pending:disabled { opacity: 0.5; cursor: wait; }
+        .place-result { font-size: 13px; }
+        .place-result.ok { color: #26a69a; }
+        .place-result.fail { color: #ef5350; }
+        .place-result.loading { color: #787b86; }
         .scan-time { cursor: pointer; }
         .scan-time:hover { color: #2962ff; }
         .schedule-config {
@@ -1361,6 +1388,14 @@
                                 <span class="value">${(RISK_PCT * 100).toFixed(0)}% = ${formatMoney(MAX_RISK)}</span>
                             </div>
                         </div>
+                        <div class="place-action-bar">
+                            <button class="btn-place-pending"
+                                    id="place-btn-${pair.replace('/', '-')}"
+                                    onclick="event.stopPropagation(); placePendingFromPattern('${pair}')">
+                                Открыть pending по этому паттерну
+                            </button>
+                            <span class="place-result" id="place-result-${pair.replace('/', '-')}"></span>
+                        </div>
                         <div id="minichart-${pair.replace('/', '-')}" class="mini-chart-container"></div>
                     </td>
                 </tr>`;
@@ -1636,6 +1671,62 @@
                 } else {
                     setTimeout(() => renderMiniChart(pair), 50);
                 }
+            }
+        };
+
+        window.placePendingFromPattern = async function(pair) {
+            const r = pairResults[pair];
+            const e = r && r.entry;
+            if (!e || !e.valid) {
+                alert('Нет валидного входа для ' + pair);
+                return;
+            }
+            let secret = localStorage.getItem('scannerAdminSecret') || '';
+            if (!secret) {
+                secret = prompt('Введите admin secret сканера (одноразово сохранится в браузере):') || '';
+                if (!secret) return;
+                localStorage.setItem('scannerAdminSecret', secret);
+            }
+            const dir = e.direction === 'up' ? 'LONG' : 'SHORT';
+            const confirmMsg = `Открыть pending ${dir} ${pair}?\n\n`
+                + `Entry: ${formatPrice(e.entry)}\nSL: ${formatPrice(e.stop)}\nTP: ${formatPrice(e.take)}\nR:R 1:${e.rr.toFixed(1)}`
+                + `\n\nОбъём посчитается автоматически от риска ${(RISK_PCT*100).toFixed(0)}%.`;
+            if (!confirm(confirmMsg)) return;
+
+            const slug = pair.replace('/', '-');
+            const btn = document.getElementById('place-btn-' + slug);
+            const out = document.getElementById('place-result-' + slug);
+            if (btn) btn.disabled = true;
+            if (out) { out.className = 'place-result loading'; out.textContent = 'Размещаем...'; }
+
+            try {
+                const resp = await fetch('/api/manual-pending', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json', 'X-Admin-Secret': secret },
+                    body: JSON.stringify({
+                        pair,
+                        direction: e.direction,
+                        entry: e.entry, stop: e.stop, take: e.take, rr: e.rr,
+                        trend: r.trend, phase: r.phase,
+                    }),
+                });
+                const data = await resp.json().catch(() => ({ success: false, error: 'bad JSON' }));
+                if (resp.status === 401) {
+                    localStorage.removeItem('scannerAdminSecret');
+                    if (out) { out.className = 'place-result fail'; out.textContent = 'Неверный admin secret — сохранённый удалён, попробуй ещё раз'; }
+                    return;
+                }
+                const ok = data.response && data.response.success;
+                if (ok) {
+                    if (out) { out.className = 'place-result ok'; out.textContent = `OK — ticket ${data.response.ticket}, ${data.response.order_type || '?'}, vol ${data.response.volume || data.request?.volume}`; }
+                } else {
+                    const err = (data.response && data.response.error) || data.error || 'fail';
+                    if (out) { out.className = 'place-result fail'; out.textContent = 'FAIL — ' + err; }
+                }
+            } catch (err) {
+                if (out) { out.className = 'place-result fail'; out.textContent = 'Сеть: ' + err.message; }
+            } finally {
+                if (btn) btn.disabled = false;
             }
         };
 

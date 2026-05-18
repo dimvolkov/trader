@@ -1147,6 +1147,51 @@ const apiServer = http.createServer(async (req, res) => {
             return proxyExecutor(req, res, `/journal${qs}`);
         }
 
+        // ─── Manual pending order: place an order from a pattern detected in UI ───
+        if (p === '/api/manual-pending' && req.method === 'POST') {
+            if (!requireAdmin(req)) return reply(res, 401, { success: false, error: 'admin secret required' });
+            if (!CONFIG.executorUrl || !CONFIG.executorSecret) {
+                return reply(res, 503, { success: false, error: 'Executor not configured' });
+            }
+            let body;
+            try { body = await jsonBody(req); }
+            catch { return reply(res, 400, { success: false, error: 'bad JSON' }); }
+            const required = ['pair', 'direction', 'entry', 'stop', 'take', 'rr'];
+            for (const f of required) {
+                if (body[f] === undefined || body[f] === null) {
+                    return reply(res, 400, { success: false, error: `missing ${f}` });
+                }
+            }
+            const dirIn = String(body.direction).toLowerCase();
+            const direction = (dirIn === 'up' || dirIn === 'buy' || dirIn === 'long') ? 'up' : 'down';
+            const volume = (typeof body.volume === 'number' && body.volume > 0) ? body.volume : 0;
+            const pc = pendingConfig.get();
+            const payload = {
+                pair: body.pair,
+                direction,
+                entry: +body.entry, stop: +body.stop, take: +body.take, rr: +body.rr,
+                volume,
+                deposit: CONFIG.deposit,
+                risk_pct: CONFIG.riskPct,
+                pending_type: pc.pending_type,
+                ttl_hours: pc.ttl_hours,
+                signal_context: {
+                    manual: true,
+                    source: 'scanner.html',
+                    trend: body.trend, phase: body.phase,
+                    note: 'manual placement from UI — detected pattern',
+                },
+                config_snapshot: { ...pc, manual_mode: true },
+            };
+            try {
+                const data = await execFetch('POST', '/pending', payload);
+                log(`  MANUAL PENDING ${payload.pair} ${direction}: entry=${payload.entry} stop=${payload.stop} take=${payload.take} → ${data.success ? `OK ticket=${data.ticket}` : `FAIL ${data.error}`}`);
+                return reply(res, 200, { request: payload, response: data });
+            } catch (err) {
+                return reply(res, 502, { success: false, error: err.message });
+            }
+        }
+
         // ─── Test pending order: synthetic signal near current market ───
         if (p === '/api/test-pending' && req.method === 'POST') {
             if (!requireAdmin(req)) return reply(res, 401, { success: false, error: 'admin secret required' });
