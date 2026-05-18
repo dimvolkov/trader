@@ -208,6 +208,92 @@
             border-color: #2962ff;
             color: #fff;
         }
+        .field-row {
+            display: grid;
+            grid-template-columns: 1fr 200px;
+            gap: 10px;
+            align-items: center;
+            margin-bottom: 10px;
+        }
+        .field-label {
+            font-size: 13px;
+            color: #d1d4dc;
+        }
+        .field-help {
+            font-size: 11px;
+            color: #787b86;
+            margin-top: 2px;
+        }
+        .field-input, .field-select {
+            background: #2a2e39;
+            color: #fff;
+            border: 1px solid #363a45;
+            padding: 6px 10px;
+            border-radius: 4px;
+            font-size: 13px;
+            font-family: monospace;
+            outline: none;
+        }
+        .field-input:focus, .field-select:focus { border-color: #2962ff; }
+        .field-toggle {
+            transform: scale(1.2);
+            justify-self: end;
+            margin-right: 6px;
+        }
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 8px;
+            margin-top: 10px;
+        }
+        .stat-tile {
+            background: #2a2e39;
+            border: 1px solid #363a45;
+            border-radius: 6px;
+            padding: 10px 12px;
+        }
+        .stat-tile-label {
+            font-size: 11px;
+            color: #787b86;
+            text-transform: uppercase;
+        }
+        .stat-tile-value {
+            font-size: 18px;
+            color: #fff;
+            font-weight: 700;
+            margin-top: 2px;
+        }
+        .stat-positive { color: #26a69a; }
+        .stat-negative { color: #ef5350; }
+        .reco {
+            padding: 8px 12px;
+            border-radius: 6px;
+            margin-bottom: 6px;
+            font-size: 12px;
+            line-height: 1.5;
+        }
+        .reco-warning { background: rgba(239, 83, 80, 0.15); border-left: 3px solid #ef5350; }
+        .reco-ok      { background: rgba(38, 166, 154, 0.15); border-left: 3px solid #26a69a; }
+        .reco-info    { background: rgba(41, 98, 255, 0.15); border-left: 3px solid #2962ff; }
+        table.pending-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 12px;
+            font-family: monospace;
+            margin-top: 8px;
+        }
+        table.pending-table th, table.pending-table td {
+            text-align: left;
+            padding: 6px 8px;
+            border-bottom: 1px solid #2a2e39;
+        }
+        table.pending-table th { color: #787b86; font-weight: 600; }
+        .btn-danger {
+            background: #ef5350;
+            color: #fff;
+            border-color: #ef5350;
+        }
+        .btn-danger:hover { background: #d33b38; }
     </style>
 </head>
 <body>
@@ -233,6 +319,204 @@
         <div class="section">
             <h2>Источники данных</h2>
             <div id="sourceCards"></div>
+        </div>
+
+        <div class="section">
+            <h2>Отложенные ордера (Pending)</h2>
+            <div class="source-card">
+                <div class="source-header">
+                    <span class="source-name">Доступ администратора</span>
+                    <span id="pcAdminBadge"><span class="source-badge badge-empty">Не задан</span></span>
+                </div>
+                <div class="source-info">
+                    Секрет нужен для чтения/изменения настроек pending и просмотра статистики.
+                    Должен совпадать с переменной окружения <code>SCANNER_ADMIN_SECRET</code> на сервере.
+                </div>
+                <div class="key-row">
+                    <input type="password" class="key-input" id="pcAdminSecret" placeholder="Admin secret">
+                </div>
+                <div class="btn-row">
+                    <button class="btn btn-primary" onclick="pcSaveAdmin()">Сохранить локально</button>
+                    <button class="btn btn-test" onclick="pcLoadAll()">Загрузить с сервера</button>
+                </div>
+                <div class="test-result" id="pcAdminResult"></div>
+            </div>
+
+            <div class="source-card">
+                <div class="source-header">
+                    <span class="source-name">Поведение pending</span>
+                    <span id="pcStateBadge"><span class="source-badge badge-empty">Не загружено</span></span>
+                </div>
+
+                <div class="field-row">
+                    <div>
+                        <div class="field-label">Включить pending вместо market</div>
+                        <div class="field-help">OFF → старые рыночные ордера; ON → отложки на signal2.price</div>
+                    </div>
+                    <input type="checkbox" id="pc_use_pending" class="field-toggle">
+                </div>
+
+                <div class="field-row">
+                    <div>
+                        <div class="field-label">Тип отложки</div>
+                        <div class="field-help">limit — на откате к уровню; stop — на пробое; auto — по контексту</div>
+                    </div>
+                    <select class="field-select" id="pc_pending_type">
+                        <option value="limit">limit</option>
+                        <option value="stop">stop</option>
+                        <option value="auto">auto</option>
+                    </select>
+                </div>
+
+                <div class="field-row">
+                    <div>
+                        <div class="field-label">Срок жизни (часов), 0 = GTC</div>
+                        <div class="field-help">MT5-уровень экспирации — pending снимается автоматически</div>
+                    </div>
+                    <input type="number" class="field-input" id="pc_ttl_hours" min="0" step="1">
+                </div>
+
+                <div class="field-row">
+                    <div>
+                        <div class="field-label">Replace: снимать старые pending на той же паре</div>
+                        <div class="field-help">При новом сигнале сначала отменить, потом поставить новый</div>
+                    </div>
+                    <input type="checkbox" id="pc_replace_existing_pending" class="field-toggle">
+                </div>
+
+                <div class="field-row">
+                    <div>
+                        <div class="field-label">Макс. дрейф цены от entry (доля от entry→take)</div>
+                        <div class="field-help">0.5 = если цена прошла половину пути к TP, R:R испорчен — пропустить</div>
+                    </div>
+                    <input type="number" class="field-input" id="pc_max_distance_pct_from_entry" min="0" max="1" step="0.05">
+                </div>
+
+                <div class="field-row">
+                    <div>
+                        <div class="field-label">Минимальный R:R</div>
+                        <div class="field-help">Сигналы со слабым R:R отбрасываются</div>
+                    </div>
+                    <input type="number" class="field-input" id="pc_min_rr" min="0" step="0.1">
+                </div>
+
+                <div class="field-row">
+                    <div>
+                        <div class="field-label">Макс. одновременно активных pending</div>
+                        <div class="field-help">Защита от перегруза счёта</div>
+                    </div>
+                    <input type="number" class="field-input" id="pc_max_pending_total" min="1" step="1">
+                </div>
+
+                <div class="btn-row">
+                    <button class="btn btn-primary" onclick="pcSaveConfig()">Сохранить настройки pending</button>
+                </div>
+                <div class="test-result" id="pcSaveResult"></div>
+            </div>
+
+            <div class="source-card">
+                <div class="source-header">
+                    <span class="source-name">Watcher (фоновая отмена)</span>
+                </div>
+                <div class="source-info">
+                    Раз в N минут проверяет активные pending и отменяет те, у которых цена уже пробила SL без срабатывания, или которые «зависли» дольше указанного времени.
+                </div>
+
+                <div class="field-row">
+                    <div>
+                        <div class="field-label">Отменять pending если рынок пробил SL</div>
+                    </div>
+                    <input type="checkbox" id="pc_cancel_on_stop_breach" class="field-toggle">
+                </div>
+
+                <div class="field-row">
+                    <div>
+                        <div class="field-label">Макс. возраст pending в часах (0 = выключено)</div>
+                    </div>
+                    <input type="number" class="field-input" id="pc_watcher_max_age_hours" min="0" step="1">
+                </div>
+
+                <div class="field-row">
+                    <div>
+                        <div class="field-label">Интервал проверки (минут)</div>
+                    </div>
+                    <input type="number" class="field-input" id="pc_watcher_interval_minutes" min="1" step="1">
+                </div>
+            </div>
+
+            <div class="source-card">
+                <div class="source-header">
+                    <span class="source-name">Адаптивный фильтр по истории</span>
+                </div>
+                <div class="source-info">
+                    Если на паре есть достаточно сделок и winrate ниже порога — новые сигналы по этой паре пропускаются.
+                </div>
+
+                <div class="field-row">
+                    <div>
+                        <div class="field-label">Порог winrate (0 = выключено)</div>
+                        <div class="field-help">Например 0.4 → пропускать пары с winrate &lt; 40%</div>
+                    </div>
+                    <input type="number" class="field-input" id="pc_min_winrate_threshold" min="0" max="1" step="0.05">
+                </div>
+
+                <div class="field-row">
+                    <div>
+                        <div class="field-label">Мин. число сделок для оценки</div>
+                        <div class="field-help">Не отбрасывать пары пока статистики мало</div>
+                    </div>
+                    <input type="number" class="field-input" id="pc_min_samples_for_winrate" min="1" step="1">
+                </div>
+
+                <div class="field-row">
+                    <div>
+                        <div class="field-label">Окно анализа (дней)</div>
+                    </div>
+                    <input type="number" class="field-input" id="pc_winrate_lookback_days" min="1" step="1">
+                </div>
+            </div>
+        </div>
+
+        <div class="section">
+            <h2>Ретроспективный анализ</h2>
+            <div class="source-card">
+                <div class="source-header">
+                    <span class="source-name">Сводная статистика</span>
+                    <span>
+                        <button class="btn btn-test" onclick="pcLoadStats()">Обновить</button>
+                    </span>
+                </div>
+                <div class="field-row">
+                    <div class="field-label">Период (дней)</div>
+                    <input type="number" class="field-input" id="statsDays" min="1" max="365" value="30">
+                </div>
+                <div class="stats-grid" id="statsGrid"></div>
+                <div id="statsByPair" style="margin-top:14px"></div>
+            </div>
+
+            <div class="source-card">
+                <div class="source-header">
+                    <span class="source-name">Активные pending</span>
+                    <span>
+                        <button class="btn btn-test" onclick="pcLoadActivePending()">Обновить</button>
+                    </span>
+                </div>
+                <div id="activePendingList">—</div>
+            </div>
+
+            <div class="source-card">
+                <div class="source-header">
+                    <span class="source-name">Анализ по паре</span>
+                </div>
+                <div class="field-row">
+                    <div class="field-label">Пара</div>
+                    <input type="text" class="field-input" id="analysisPair" value="EUR/USD" placeholder="EUR/USD">
+                </div>
+                <div class="btn-row">
+                    <button class="btn btn-test" onclick="pcLoadAnalysis()">Анализировать</button>
+                </div>
+                <div id="analysisResult" style="margin-top:10px"></div>
+            </div>
         </div>
 
         <div class="section">
@@ -552,6 +836,239 @@
         };
 
         initTelegram();
+
+        // ─────────────────────────── Pending Orders settings ───────────────────────────
+        const PC_FIELDS = [
+            'use_pending', 'pending_type', 'ttl_hours', 'replace_existing_pending',
+            'max_distance_pct_from_entry', 'cancel_on_stop_breach', 'watcher_max_age_hours',
+            'watcher_interval_minutes', 'min_rr', 'min_winrate_threshold',
+            'min_samples_for_winrate', 'winrate_lookback_days', 'max_pending_total',
+        ];
+        const PC_BOOL = new Set(['use_pending', 'replace_existing_pending', 'cancel_on_stop_breach']);
+        const PC_NUM = new Set([
+            'ttl_hours', 'max_distance_pct_from_entry', 'watcher_max_age_hours',
+            'watcher_interval_minutes', 'min_rr', 'min_winrate_threshold',
+            'min_samples_for_winrate', 'winrate_lookback_days', 'max_pending_total',
+        ]);
+
+        function pcAdminSecret() {
+            return localStorage.getItem('scannerAdminSecret') || '';
+        }
+
+        function pcRefreshAdminBadge() {
+            const badge = document.getElementById('pcAdminBadge');
+            badge.innerHTML = pcAdminSecret()
+                ? '<span class="source-badge badge-active">Задан</span>'
+                : '<span class="source-badge badge-empty">Не задан</span>';
+            document.getElementById('pcAdminSecret').value = pcAdminSecret();
+        }
+
+        window.pcSaveAdmin = function () {
+            const v = document.getElementById('pcAdminSecret').value.trim();
+            localStorage.setItem('scannerAdminSecret', v);
+            pcRefreshAdminBadge();
+            document.getElementById('pcAdminResult').innerHTML =
+                '<span class="test-ok">Сохранено локально</span>';
+        };
+
+        async function pcFetch(path, opts = {}) {
+            opts.headers = opts.headers || {};
+            opts.headers['X-Admin-Secret'] = pcAdminSecret();
+            const res = await fetch(path, opts);
+            return res.json().catch(() => ({ success: false, error: 'bad JSON' }));
+        }
+
+        function pcShow(el, msg, kind = 'ok') {
+            const cls = kind === 'ok' ? 'test-ok' : kind === 'fail' ? 'test-fail' : 'test-loading';
+            el.innerHTML = `<span class="${cls}">${msg}</span>`;
+        }
+
+        function pcFillForm(cfg) {
+            for (const f of PC_FIELDS) {
+                const el = document.getElementById('pc_' + f);
+                if (!el) continue;
+                if (PC_BOOL.has(f)) el.checked = !!cfg[f];
+                else el.value = cfg[f] ?? '';
+            }
+            document.getElementById('pcStateBadge').innerHTML = cfg.use_pending
+                ? '<span class="source-badge badge-active">PENDING ON</span>'
+                : '<span class="source-badge badge-configured">MARKET (OFF)</span>';
+        }
+
+        function pcCollectForm() {
+            const patch = {};
+            for (const f of PC_FIELDS) {
+                const el = document.getElementById('pc_' + f);
+                if (!el) continue;
+                if (PC_BOOL.has(f)) patch[f] = el.checked;
+                else if (PC_NUM.has(f)) {
+                    const n = parseFloat(el.value);
+                    if (!Number.isNaN(n)) patch[f] = n;
+                } else {
+                    patch[f] = el.value;
+                }
+            }
+            return patch;
+        }
+
+        window.pcLoadAll = async function () {
+            pcShow(document.getElementById('pcAdminResult'), 'Загрузка...', 'loading');
+            const r = await pcFetch('/api/pending-config');
+            if (!r.success) {
+                pcShow(document.getElementById('pcAdminResult'),
+                    'Ошибка: ' + (r.error || 'нет доступа'), 'fail');
+                return;
+            }
+            pcFillForm(r.config);
+            pcShow(document.getElementById('pcAdminResult'), 'Конфиг загружен', 'ok');
+            pcLoadStats();
+            pcLoadActivePending();
+        };
+
+        window.pcSaveConfig = async function () {
+            const patch = pcCollectForm();
+            pcShow(document.getElementById('pcSaveResult'), 'Сохранение...', 'loading');
+            const r = await pcFetch('/api/pending-config', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(patch),
+            });
+            if (!r.success) {
+                pcShow(document.getElementById('pcSaveResult'),
+                    'Ошибка: ' + (r.error || r.errors?.join('; ') || 'fail'), 'fail');
+                return;
+            }
+            pcFillForm(r.config);
+            pcShow(document.getElementById('pcSaveResult'), 'Сохранено и применено', 'ok');
+        };
+
+        function pcRenderStats(data) {
+            const o = data.overall || {};
+            const k = data.by_kind || {};
+            const l = data.pending_lifecycle || {};
+            const grid = document.getElementById('statsGrid');
+            const fmtPct = (v) => `${((v || 0) * 100).toFixed(0)}%`;
+            const tiles = [
+                ['Сделок', o.trades ?? 0],
+                ['Winrate', fmtPct(o.winrate)],
+                ['Профит', (o.total_profit ?? 0).toFixed(2), (o.total_profit ?? 0) >= 0 ? 'positive' : 'negative'],
+                ['Best / Worst', `${(o.best ?? 0).toFixed(2)} / ${(o.worst ?? 0).toFixed(2)}`],
+                ['Pending placed', l.total ?? 0],
+                ['Pending filled', `${l.filled ?? 0} (${fmtPct(l.fill_rate)})`],
+                ['Pending cancelled', l.cancelled ?? 0],
+                ['Pending expired', l.expired ?? 0],
+                ['Market winrate', fmtPct(k.market?.winrate)],
+                ['Pending winrate', fmtPct(k.pending?.winrate)],
+            ];
+            grid.innerHTML = tiles.map(([label, value, cls]) => `
+                <div class="stat-tile">
+                    <div class="stat-tile-label">${label}</div>
+                    <div class="stat-tile-value ${cls ? 'stat-' + cls : ''}">${value}</div>
+                </div>
+            `).join('');
+
+            const byPair = data.by_pair || {};
+            const rows = Object.entries(byPair)
+                .sort((a, b) => (b[1].total_profit || 0) - (a[1].total_profit || 0))
+                .map(([sym, s]) => `
+                    <tr>
+                        <td>${sym}</td>
+                        <td>${s.trades}</td>
+                        <td>${fmtPct(s.winrate)}</td>
+                        <td style="color:${s.total_profit >= 0 ? '#26a69a' : '#ef5350'}">${s.total_profit.toFixed(2)}</td>
+                    </tr>
+                `).join('');
+            document.getElementById('statsByPair').innerHTML = rows ? `
+                <table class="pending-table">
+                    <thead><tr><th>Пара</th><th>Сделок</th><th>Winrate</th><th>Профит</th></tr></thead>
+                    <tbody>${rows}</tbody>
+                </table>
+            ` : '<div class="field-help">Нет данных по парам</div>';
+        }
+
+        window.pcLoadStats = async function () {
+            const days = parseInt(document.getElementById('statsDays').value || '30');
+            const r = await pcFetch('/api/stats?days=' + days);
+            if (!r.success) {
+                document.getElementById('statsGrid').innerHTML =
+                    `<div class="field-help">Ошибка: ${r.error || 'fail'}</div>`;
+                document.getElementById('statsByPair').innerHTML = '';
+                return;
+            }
+            pcRenderStats(r);
+        };
+
+        window.pcLoadActivePending = async function () {
+            const r = await pcFetch('/api/pending-list');
+            const el = document.getElementById('activePendingList');
+            if (!r.success) {
+                el.innerHTML = `<div class="field-help">Ошибка: ${r.error || 'fail'}</div>`;
+                return;
+            }
+            const orders = r.orders || [];
+            if (!orders.length) {
+                el.innerHTML = '<div class="field-help">Нет активных pending</div>';
+                return;
+            }
+            el.innerHTML = `
+                <table class="pending-table">
+                    <thead><tr>
+                        <th>Тикет</th><th>Пара</th><th>Тип</th>
+                        <th>Объём</th><th>Entry</th><th>SL</th><th>TP</th><th></th>
+                    </tr></thead>
+                    <tbody>${orders.map(o => `
+                        <tr>
+                            <td>${o.ticket}</td>
+                            <td>${o.symbol}</td>
+                            <td>${o.type}</td>
+                            <td>${o.volume}</td>
+                            <td>${o.price_open}</td>
+                            <td>${o.sl}</td>
+                            <td>${o.tp}</td>
+                            <td><button class="btn btn-danger"
+                                onclick="pcCancelPending(${o.ticket})">Отмена</button></td>
+                        </tr>
+                    `).join('')}</tbody>
+                </table>
+            `;
+        };
+
+        window.pcCancelPending = async function (ticket) {
+            if (!confirm(`Отменить pending ${ticket}?`)) return;
+            const r = await pcFetch('/api/pending-cancel/' + ticket, { method: 'DELETE' });
+            if (r.success) pcLoadActivePending();
+            else alert('Ошибка: ' + (r.error || 'fail'));
+        };
+
+        window.pcLoadAnalysis = async function () {
+            const pair = document.getElementById('analysisPair').value.trim();
+            if (!pair) return;
+            const el = document.getElementById('analysisResult');
+            el.innerHTML = '<span class="test-loading">Анализ...</span>';
+            const r = await pcFetch('/api/analysis?pair=' + encodeURIComponent(pair) + '&days=60');
+            if (!r.success) {
+                el.innerHTML = `<span class="test-fail">Ошибка: ${r.error || 'fail'}</span>`;
+                return;
+            }
+            const fmtPct = (v) => `${((v || 0) * 100).toFixed(0)}%`;
+            const d = r.deals_stats || {};
+            const pb = r.pending_breakdown || {};
+            const recos = (r.recommendations || []).map(rc =>
+                `<div class="reco reco-${rc.level}">${rc.text}</div>`).join('') || '<div class="field-help">Нет рекомендаций (мало данных)</div>';
+            el.innerHTML = `
+                <div class="stats-grid">
+                    <div class="stat-tile"><div class="stat-tile-label">Сделок</div><div class="stat-tile-value">${d.trades || 0}</div></div>
+                    <div class="stat-tile"><div class="stat-tile-label">Winrate</div><div class="stat-tile-value">${fmtPct(d.winrate)}</div></div>
+                    <div class="stat-tile"><div class="stat-tile-label">Профит</div>
+                        <div class="stat-tile-value ${(d.total_profit || 0) >= 0 ? 'stat-positive' : 'stat-negative'}">${(d.total_profit || 0).toFixed(2)}</div></div>
+                    <div class="stat-tile"><div class="stat-tile-label">Pending filled/total</div>
+                        <div class="stat-tile-value">${pb.filled || 0} / ${pb.total || 0}</div></div>
+                </div>
+                <div style="margin-top:12px">${recos}</div>
+            `;
+        };
+
+        pcRefreshAdminBadge();
     })();
     </script>
 </body>

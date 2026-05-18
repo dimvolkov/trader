@@ -1,15 +1,34 @@
 """
 Trade Executor — FastAPI service that accepts trading signals and executes them on MT5.
 Runs on Windows Server with native MetaTrader 5.
+
+Endpoints:
+  GET  /health
+  GET  /account
+  GET  /positions
+  POST /order                — open market order (legacy)
+  POST /close/{ticket}       — close position
+
+  POST /pending              — place pending order with signal context
+  GET  /pending              — list active pendings
+  DELETE /pending/{ticket}   — cancel pending
+  POST /pending/cancel-by-pair/{pair} — cancel all our pendings on pair
+
+  GET  /history?days=30      — recorded signal attempts (from local JSONL)
+  GET  /history/mt5?days=30  — MT5 deals & orders history
+  GET  /stats?days=30        — aggregated stats: winrate, fill-rate, avg R, by pair/type
+  GET  /analysis?pair=...    — per-pair deep analysis with recommendations
 """
 
 import os
 import json
+import uuid
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
+from typing import Optional, List, Dict, Any
 
-from fastapi import FastAPI, HTTPException, Header, Request
+from fastapi import FastAPI, HTTPException, Header, Request, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 import uvicorn
@@ -19,9 +38,12 @@ import mt5_bridge
 # ─── Configuration ───
 API_SECRET = os.getenv("EXECUTOR_API_SECRET", "change-me-to-a-real-secret")
 MAX_OPEN_POSITIONS = int(os.getenv("MAX_OPEN_POSITIONS", "5"))
+MAX_PENDING_ORDERS = int(os.getenv("MAX_PENDING_ORDERS", "10"))
 LOG_FILE = os.getenv("LOG_FILE", "C:/trade-executor/trades.log")
 
 # ─── Logging ───
+log_path = Path(LOG_FILE)
+log_path.parent.mkdir(parents=True, exist_ok=True)
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
@@ -33,7 +55,7 @@ logging.basicConfig(
 logger = logging.getLogger("executor")
 
 # ─── App ───
-app = FastAPI(title="Trade Executor", version="1.0.0")
+app = FastAPI(title="Trade Executor", version="2.0.0")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -43,29 +65,48 @@ app.add_middleware(
 
 # ─── Trade log (JSON lines) ───
 TRADE_LOG = Path(os.getenv("TRADE_LOG_JSON", "C:/trade-executor/trades.jsonl"))
+TRADE_LOG.parent.mkdir(parents=True, exist_ok=True)
 
 
 def log_trade(data: dict):
     """Append trade record to JSON lines file."""
     data["timestamp"] = datetime.now(timezone.utc).isoformat()
-    with open(TRADE_LOG, "a") as f:
+    with open(TRADE_LOG, "a", encoding="utf-8") as f:
         f.write(json.dumps(data, ensure_ascii=False) + "\n")
 
 
-# ─── Models ───
-class OrderRequest(BaseModel):
-    pair: str = Field(..., description="Currency pair, e.g. EUR/USD")
-    direction: str = Field(..., description="'up' or 'down'")
-    entry: float = Field(..., description="Entry price")
-    stop: float = Field(..., description="Stop loss price")
-    take: float = Field(..., description="Take profit price")
-    rr: float = Field(..., description="Risk/Reward ratio")
-    volume: float = Field(0, description="Lot size (0 = auto-calculate)")
-    deposit: float = Field(100000, description="Account deposit for position sizing")
-    risk_pct: float = Field(0.01, description="Risk percentage (0.01 = 1%)")
+def read_trade_log(days: int = 30, pair: Optional[str] = None, action: Optional[str] = None) -> List[dict]:
+    """Read trade log filtered by time/pair/action."""
+    if not TRADE_LOG.exists():
+        return []
+    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+    out = []
+    with open(TRADE_LOG, "r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                rec = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            ts = rec.get("timestamp")
+            if ts:
+                try:
+                    dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+                    if dt < cutoff:
+                        continue
+                except ValueError:
+                    pass
+            if pair and rec.get("pair") != pair:
+                continue
+            if action and rec.get("action") != action:
+                continue
+            out.append(rec)
+    return out
 
 
-# ─── Helper: pair conversion ───
+# ─── Helper ───
 def pair_to_mt5_symbol(pair: str) -> str:
     """Convert 'EUR/USD' to 'EURUSD' format for MT5."""
     return pair.replace("/", "")
@@ -82,26 +123,64 @@ def calculate_volume(
     if stop_pips == 0:
         return 0.01
 
-    # Standard lot = 100,000 units, 1 pip = ~$10 for major pairs
     lot_size = risk_amount / (stop_pips * 10)
-    # Round to 2 decimal places, min 0.01
     lot_size = max(0.01, round(lot_size, 2))
     return lot_size
 
 
-# ─── Endpoints ───
+def require_auth(secret: Optional[str]):
+    if secret != API_SECRET:
+        raise HTTPException(status_code=401, detail="Unauthorized")
+
+
+# ─── Models ───
+class OrderRequest(BaseModel):
+    pair: str = Field(..., description="Currency pair, e.g. EUR/USD")
+    direction: str = Field(..., description="'up'/'buy' or 'down'/'sell'")
+    entry: float
+    stop: float
+    take: float
+    rr: float
+    volume: float = Field(0, description="Lot size (0 = auto-calculate)")
+    deposit: float = 100000
+    risk_pct: float = 0.01
+
+
+class PendingRequest(BaseModel):
+    pair: str = Field(..., description="e.g. EUR/USD")
+    direction: str = Field(..., description="'up'/'buy' or 'down'/'sell'")
+    entry: float
+    stop: float
+    take: float
+    rr: float
+    volume: float = Field(0, description="0 = auto-calculate from risk")
+    deposit: float = 100000
+    risk_pct: float = 0.01
+    pending_type: str = Field("auto", description="'limit' | 'stop' | 'auto'")
+    ttl_hours: float = Field(0, description="0 = GTC; otherwise expire after N hours")
+    # Signal context for retrospective analysis
+    signal_context: Optional[Dict[str, Any]] = Field(default_factory=dict)
+    config_snapshot: Optional[Dict[str, Any]] = Field(default_factory=dict)
+
+
+def _normalize_direction(direction: str) -> str:
+    d = direction.lower()
+    if d in ("up", "buy", "long"):
+        return "buy"
+    if d in ("down", "sell", "short"):
+        return "sell"
+    raise HTTPException(status_code=400, detail=f"Bad direction: {direction}")
+
+
+# ─── Endpoints: basic ───
 @app.get("/health")
 async def health():
-    """Health check."""
     return {"status": "ok", "time": datetime.now(timezone.utc).isoformat()}
 
 
 @app.get("/account")
 async def account(x_api_secret: str = Header(None)):
-    """Get MT5 account info."""
-    if x_api_secret != API_SECRET:
-        raise HTTPException(status_code=401, detail="Unauthorized")
-
+    require_auth(x_api_secret)
     result = mt5_bridge.account_info()
     if not result.get("success"):
         raise HTTPException(status_code=500, detail=result.get("error", "MT5 error"))
@@ -110,29 +189,27 @@ async def account(x_api_secret: str = Header(None)):
 
 @app.get("/positions")
 async def positions(x_api_secret: str = Header(None)):
-    """Get open positions."""
-    if x_api_secret != API_SECRET:
-        raise HTTPException(status_code=401, detail="Unauthorized")
-
+    require_auth(x_api_secret)
     result = mt5_bridge.get_positions()
     if not result.get("success"):
         raise HTTPException(status_code=500, detail=result.get("error", "MT5 error"))
     return result
 
 
+@app.get("/symbol/{pair}")
+async def symbol_info(pair: str, x_api_secret: str = Header(None)):
+    require_auth(x_api_secret)
+    return mt5_bridge.get_symbol_info(pair_to_mt5_symbol(pair))
+
+
+# ─── Endpoints: market order (legacy) ───
 @app.post("/order")
-async def create_order(order: OrderRequest, request: Request, x_api_secret: str = Header(None)):
-    """
-    Open a new trade order.
-    Called by the scanner when a valid signal is found.
-    """
-    # Auth
-    if x_api_secret != API_SECRET:
-        raise HTTPException(status_code=401, detail="Unauthorized")
+async def create_order(order: OrderRequest, x_api_secret: str = Header(None)):
+    """Open a market order (immediate execution)."""
+    require_auth(x_api_secret)
 
-    logger.info(f"Order request: {order.pair} {order.direction} entry={order.entry} stop={order.stop} take={order.take}")
+    logger.info(f"Market order: {order.pair} {order.direction} entry={order.entry}")
 
-    # Check max positions
     pos_result = mt5_bridge.get_positions()
     if pos_result.get("success"):
         open_count = len(pos_result.get("positions", []))
@@ -141,41 +218,34 @@ async def create_order(order: OrderRequest, request: Request, x_api_secret: str 
             logger.warning(msg)
             return {"success": False, "error": msg}
 
-        # Check if already have position on this pair
         symbol = pair_to_mt5_symbol(order.pair)
         for p in pos_result.get("positions", []):
             if p["symbol"] == symbol:
-                msg = f"Already have open position on {order.pair}, skipping"
+                msg = f"Already have position on {order.pair}, skipping"
                 logger.warning(msg)
                 return {"success": False, "error": msg}
 
-    # Calculate volume if not provided
-    volume = order.volume
-    if volume <= 0:
-        volume = calculate_volume(
-            order.pair, order.entry, order.stop, order.deposit, order.risk_pct
-        )
-
-    # Convert direction
-    mt5_direction = "buy" if order.direction == "up" else "sell"
+    direction = _normalize_direction(order.direction)
     symbol = pair_to_mt5_symbol(order.pair)
 
-    # Execute order
+    volume = order.volume
+    if volume <= 0:
+        volume = calculate_volume(order.pair, order.entry, order.stop, order.deposit, order.risk_pct)
+
     result = mt5_bridge.open_order(
         symbol=symbol,
-        direction=mt5_direction,
+        direction=direction,
         volume=volume,
         entry_price=order.entry,
         stop_loss=order.stop,
         take_profit=order.take,
-        comment=f"scan_{order.pair}_{order.rr:.1f}",
+        comment=f"M_{order.pair}_{order.rr:.1f}",
     )
 
-    # Log trade
     log_trade({
-        "action": "open",
+        "action": "market_open",
         "pair": order.pair,
-        "direction": mt5_direction,
+        "direction": direction,
         "volume": volume,
         "entry": order.entry,
         "stop": order.stop,
@@ -185,35 +255,391 @@ async def create_order(order: OrderRequest, request: Request, x_api_secret: str 
     })
 
     if result.get("success"):
-        logger.info(f"Order executed: {order.pair} {mt5_direction} vol={volume} id={result.get('order_id')}")
+        logger.info(f"Market done: {order.pair} {direction} vol={volume} id={result.get('order_id')}")
     else:
-        logger.error(f"Order failed: {order.pair} — {result.get('error')}")
+        logger.error(f"Market failed: {order.pair} — {result.get('error')}")
 
     return result
 
 
 @app.post("/close/{ticket}")
 async def close_order(ticket: int, x_api_secret: str = Header(None)):
-    """Close a position by ticket number."""
-    if x_api_secret != API_SECRET:
-        raise HTTPException(status_code=401, detail="Unauthorized")
-
+    require_auth(x_api_secret)
     result = mt5_bridge.close_position(ticket)
+    log_trade({"action": "close", "ticket": ticket, "result": result})
+    if result.get("success"):
+        logger.info(f"Position closed: {ticket}")
+    else:
+        logger.error(f"Close failed: {ticket} — {result.get('error')}")
+    return result
+
+
+# ─── Endpoints: pending orders ───
+@app.post("/pending")
+async def create_pending(req: PendingRequest, x_api_secret: str = Header(None)):
+    """
+    Place a pending order. Stores full signal context for later retrospective analysis.
+    """
+    require_auth(x_api_secret)
+
+    direction = _normalize_direction(req.direction)
+    symbol = pair_to_mt5_symbol(req.pair)
+
+    logger.info(f"Pending request: {req.pair} {direction} entry={req.entry} type={req.pending_type}")
+
+    # Max pending guard
+    p_existing = mt5_bridge.get_pending_orders()
+    if p_existing.get("success") and len(p_existing.get("orders", [])) >= MAX_PENDING_ORDERS:
+        msg = f"Max pending reached ({MAX_PENDING_ORDERS})"
+        logger.warning(msg)
+        log_trade({
+            "action": "pending_rejected",
+            "pair": req.pair, "reason": msg,
+            "signal_context": req.signal_context,
+        })
+        return {"success": False, "error": msg}
+
+    # Volume
+    volume = req.volume
+    if volume <= 0:
+        volume = calculate_volume(req.pair, req.entry, req.stop, req.deposit, req.risk_pct)
+
+    # Expiration
+    expiration_ts = 0
+    if req.ttl_hours and req.ttl_hours > 0:
+        expiration_ts = int((datetime.now(timezone.utc) + timedelta(hours=req.ttl_hours)).timestamp())
+
+    # Current market price (for context)
+    sym_info = mt5_bridge.get_symbol_info(symbol)
+    market_price = None
+    if sym_info.get("success"):
+        market_price = sym_info["ask"] if direction == "buy" else sym_info["bid"]
+
+    attempt_id = str(uuid.uuid4())
+    comment = f"P_{req.pair.replace('/', '')}_{attempt_id[:6]}"
+
+    result = mt5_bridge.place_pending_order(
+        symbol=symbol,
+        direction=direction,
+        volume=volume,
+        entry_price=req.entry,
+        stop_loss=req.stop,
+        take_profit=req.take,
+        pending_type=req.pending_type,
+        expiration_ts=expiration_ts,
+        comment=comment,
+    )
 
     log_trade({
-        "action": "close",
-        "ticket": ticket,
+        "action": "pending_placed" if result.get("success") else "pending_failed",
+        "attempt_id": attempt_id,
+        "pair": req.pair,
+        "direction": direction,
+        "volume": volume,
+        "entry": req.entry,
+        "stop": req.stop,
+        "take": req.take,
+        "rr": req.rr,
+        "pending_type_requested": req.pending_type,
+        "ttl_hours": req.ttl_hours,
+        "expiration_ts": expiration_ts,
+        "market_price_at_place": market_price,
+        "ticket": result.get("ticket"),
+        "comment": comment,
+        "signal_context": req.signal_context,
+        "config_snapshot": req.config_snapshot,
         "result": result,
     })
 
     if result.get("success"):
-        logger.info(f"Position closed: ticket={ticket}")
+        logger.info(f"Pending placed: {req.pair} {direction} ticket={result.get('ticket')} type={result.get('order_type')}")
     else:
-        logger.error(f"Close failed: ticket={ticket} — {result.get('error')}")
+        logger.error(f"Pending failed: {req.pair} — {result.get('error')}")
 
+    result["attempt_id"] = attempt_id
     return result
 
 
+@app.get("/pending")
+async def list_pending(pair: Optional[str] = None, x_api_secret: str = Header(None)):
+    require_auth(x_api_secret)
+    symbol = pair_to_mt5_symbol(pair) if pair else None
+    return mt5_bridge.get_pending_orders(symbol=symbol)
+
+
+@app.delete("/pending/{ticket}")
+async def cancel_pending(ticket: int, reason: Optional[str] = None, x_api_secret: str = Header(None)):
+    require_auth(x_api_secret)
+    result = mt5_bridge.cancel_pending_order(ticket)
+    log_trade({
+        "action": "pending_cancelled",
+        "ticket": ticket,
+        "reason": reason or "manual",
+        "result": result,
+    })
+    if result.get("success"):
+        logger.info(f"Pending cancelled: {ticket} ({reason or 'manual'})")
+    else:
+        logger.error(f"Cancel failed: {ticket} — {result.get('error')}")
+    return result
+
+
+@app.post("/pending/cancel-by-pair/{pair}")
+async def cancel_by_pair(pair: str, reason: Optional[str] = "replace", x_api_secret: str = Header(None)):
+    require_auth(x_api_secret)
+    symbol = pair_to_mt5_symbol(pair)
+    result = mt5_bridge.cancel_pending_by_symbol(symbol, only_pending_magic=True)
+    log_trade({
+        "action": "pending_cancel_by_pair",
+        "pair": pair,
+        "reason": reason,
+        "result": result,
+    })
+    return result
+
+
+# ─── Endpoints: retrospective analysis ───
+
+ORDER_STATE_NAMES = {
+    0: "started", 1: "placed", 2: "cancelled", 3: "partial",
+    4: "filled", 5: "rejected", 6: "expired",
+}
+
+
+@app.get("/history")
+async def history(
+    days: int = Query(30, ge=1, le=365),
+    pair: Optional[str] = None,
+    action: Optional[str] = None,
+    x_api_secret: str = Header(None),
+):
+    """Local trade attempts log (includes pending_placed, pending_cancelled, market_open, etc)."""
+    require_auth(x_api_secret)
+    records = read_trade_log(days=days, pair=pair, action=action)
+    return {"success": True, "count": len(records), "records": records}
+
+
+@app.get("/history/mt5")
+async def history_mt5(
+    days: int = Query(30, ge=1, le=365),
+    pair: Optional[str] = None,
+    x_api_secret: str = Header(None),
+):
+    """MT5 deals + orders history."""
+    require_auth(x_api_secret)
+    from_ts = int((datetime.now(timezone.utc) - timedelta(days=days)).timestamp())
+    symbol = pair_to_mt5_symbol(pair) if pair else None
+    deals = mt5_bridge.get_history_deals(from_ts, symbol=symbol)
+    orders = mt5_bridge.get_history_orders(from_ts, symbol=symbol)
+    return {
+        "success": True,
+        "deals": deals.get("deals", []),
+        "orders": orders.get("orders", []),
+    }
+
+
+def _stats_for_deals(deals: List[dict]) -> Dict[str, Any]:
+    """Compute winrate, totals from a list of deals (only 'out' deals carry profit)."""
+    outs = [d for d in deals if d.get("entry") == 1]   # entry=1 → out (closing)
+    if not outs:
+        return {"trades": 0, "wins": 0, "losses": 0, "winrate": 0.0,
+                "total_profit": 0.0, "avg_profit": 0.0, "best": 0.0, "worst": 0.0}
+    wins = [d for d in outs if d["profit"] > 0]
+    losses = [d for d in outs if d["profit"] <= 0]
+    total = sum(d["profit"] + d.get("swap", 0) + d.get("commission", 0) for d in outs)
+    profits = [d["profit"] for d in outs]
+    return {
+        "trades": len(outs),
+        "wins": len(wins),
+        "losses": len(losses),
+        "winrate": round(len(wins) / len(outs), 3),
+        "total_profit": round(total, 2),
+        "avg_profit": round(sum(profits) / len(profits), 2),
+        "best": round(max(profits), 2),
+        "worst": round(min(profits), 2),
+    }
+
+
+@app.get("/stats")
+async def stats(
+    days: int = Query(30, ge=1, le=365),
+    pair: Optional[str] = None,
+    x_api_secret: str = Header(None),
+):
+    """
+    Aggregated stats for retrospective analysis:
+      - by pair: winrate, total profit
+      - by order type: market vs pending fill-rate, winrate
+      - pending stats: placed / filled / cancelled / expired counts
+    """
+    require_auth(x_api_secret)
+    from_ts = int((datetime.now(timezone.utc) - timedelta(days=days)).timestamp())
+    symbol = pair_to_mt5_symbol(pair) if pair else None
+
+    deals_r = mt5_bridge.get_history_deals(from_ts, symbol=symbol)
+    orders_r = mt5_bridge.get_history_orders(from_ts, symbol=symbol)
+    deals = deals_r.get("deals", [])
+    orders = orders_r.get("orders", [])
+
+    # Overall
+    overall = _stats_for_deals(deals)
+
+    # By pair
+    by_pair = {}
+    for sym in sorted({d["symbol"] for d in deals}):
+        by_pair[sym] = _stats_for_deals([d for d in deals if d["symbol"] == sym])
+
+    # Pending vs market
+    market_deals = [d for d in deals if d.get("magic") == mt5_bridge.MAGIC_MARKET]
+    pending_deals = [d for d in deals if d.get("magic") == mt5_bridge.MAGIC_PENDING]
+    by_kind = {
+        "market": _stats_for_deals(market_deals),
+        "pending": _stats_for_deals(pending_deals),
+    }
+
+    # Pending lifecycle stats (from MT5 orders)
+    pending_orders = [o for o in orders if o.get("magic") == mt5_bridge.MAGIC_PENDING]
+    states_count = {}
+    for o in pending_orders:
+        name = ORDER_STATE_NAMES.get(o["state"], str(o["state"]))
+        states_count[name] = states_count.get(name, 0) + 1
+    filled = states_count.get("filled", 0) + states_count.get("partial", 0)
+    cancelled = states_count.get("cancelled", 0)
+    expired = states_count.get("expired", 0)
+    total_pending = len(pending_orders)
+    fill_rate = round(filled / total_pending, 3) if total_pending else 0.0
+
+    # Local log: pending attempts (placed and rejected)
+    local = read_trade_log(days=days, pair=pair)
+    placed_local = [r for r in local if r["action"] == "pending_placed"]
+    rejected_local = [r for r in local if r["action"] in ("pending_failed", "pending_rejected")]
+
+    return {
+        "success": True,
+        "period_days": days,
+        "pair": pair,
+        "overall": overall,
+        "by_pair": by_pair,
+        "by_kind": by_kind,
+        "pending_lifecycle": {
+            "total": total_pending,
+            "filled": filled,
+            "cancelled": cancelled,
+            "expired": expired,
+            "fill_rate": fill_rate,
+            "states": states_count,
+        },
+        "local_attempts": {
+            "placed": len(placed_local),
+            "rejected": len(rejected_local),
+        },
+    }
+
+
+@app.get("/analysis")
+async def analysis(
+    pair: str,
+    days: int = Query(60, ge=1, le=365),
+    x_api_secret: str = Header(None),
+):
+    """
+    Deep per-pair retrospective analysis with concrete recommendations.
+    """
+    require_auth(x_api_secret)
+
+    from_ts = int((datetime.now(timezone.utc) - timedelta(days=days)).timestamp())
+    symbol = pair_to_mt5_symbol(pair)
+
+    deals = mt5_bridge.get_history_deals(from_ts, symbol=symbol).get("deals", [])
+    orders = mt5_bridge.get_history_orders(from_ts, symbol=symbol).get("orders", [])
+    local = read_trade_log(days=days, pair=pair)
+
+    out_deals = [d for d in deals if d.get("entry") == 1]
+    stats_all = _stats_for_deals(deals)
+
+    pending_orders = [o for o in orders if o.get("magic") == mt5_bridge.MAGIC_PENDING]
+    filled_pending = [o for o in pending_orders if o["state"] in (3, 4)]
+    cancelled_pending = [o for o in pending_orders if o["state"] == 2]
+    expired_pending = [o for o in pending_orders if o["state"] == 6]
+
+    pending_attempts = [r for r in local if r.get("action") == "pending_placed"]
+
+    # Correlate attempts with outcomes via ticket
+    correlated = []
+    for att in pending_attempts:
+        tkt = att.get("ticket")
+        if not tkt:
+            continue
+        matching = [o for o in orders if o["ticket"] == tkt]
+        state = matching[0]["state"] if matching else None
+        position_id = matching[0].get("position_id") if matching else None
+        pos_deals = [d for d in deals if d.get("position_id") == position_id] if position_id else []
+        out = next((d for d in pos_deals if d.get("entry") == 1), None)
+        correlated.append({
+            "attempt_id": att.get("attempt_id"),
+            "timestamp": att.get("timestamp"),
+            "ticket": tkt,
+            "entry": att.get("entry"),
+            "rr": att.get("rr"),
+            "signal_context": att.get("signal_context"),
+            "state": ORDER_STATE_NAMES.get(state, str(state) if state is not None else "unknown"),
+            "profit": out.get("profit") if out else None,
+            "close_price": out.get("price") if out else None,
+        })
+
+    # Build recommendations
+    recommendations = []
+    total_pending = len(pending_orders)
+    if total_pending >= 5:
+        fill_rate = len(filled_pending) / total_pending
+        if fill_rate < 0.3:
+            recommendations.append({
+                "level": "warning",
+                "text": f"Низкий fill-rate {fill_rate:.0%} ({len(filled_pending)}/{total_pending}). "
+                        "Цена редко возвращается к уровню — рассмотри STOP вместо LIMIT или увеличь max_distance.",
+            })
+        elif fill_rate > 0.85:
+            recommendations.append({
+                "level": "info",
+                "text": f"Очень высокий fill-rate {fill_rate:.0%} — стратегия хорошо ловит откаты на этой паре.",
+            })
+
+    if stats_all["trades"] >= 5:
+        if stats_all["winrate"] < 0.3:
+            recommendations.append({
+                "level": "warning",
+                "text": f"Низкий winrate {stats_all['winrate']:.0%} за {stats_all['trades']} сделок. "
+                        "Рассмотри отключение пары или подъём min_rr.",
+            })
+        elif stats_all["winrate"] >= 0.6:
+            recommendations.append({
+                "level": "ok",
+                "text": f"Хороший winrate {stats_all['winrate']:.0%} — пара работает стабильно.",
+            })
+
+    if len(expired_pending) > len(filled_pending) and len(expired_pending) >= 3:
+        recommendations.append({
+            "level": "warning",
+            "text": f"Pending часто истекают ({len(expired_pending)} expired vs {len(filled_pending)} filled). "
+                    "Увеличь ttl_hours или ставь pending ближе к рынку.",
+        })
+
+    return {
+        "success": True,
+        "pair": pair,
+        "period_days": days,
+        "deals_stats": stats_all,
+        "pending_breakdown": {
+            "total": total_pending,
+            "filled": len(filled_pending),
+            "cancelled": len(cancelled_pending),
+            "expired": len(expired_pending),
+        },
+        "attempts_correlated": correlated[-50:],   # last 50
+        "recommendations": recommendations,
+    }
+
+
 if __name__ == "__main__":
-    logger.info("Trade Executor starting...")
+    logger.info("Trade Executor v2 starting...")
     uvicorn.run(app, host="0.0.0.0", port=8500)

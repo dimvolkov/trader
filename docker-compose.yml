@@ -40,9 +40,19 @@ services:
       # Trade Executor
       - EXECUTOR_URL=${EXECUTOR_URL:-}
       - EXECUTOR_API_SECRET=${EXECUTOR_API_SECRET:-}
+      - AUTO_TRADE=${AUTO_TRADE:-false}
+      # Admin secret для /api/pending-config (UI настроек pending)
+      - SCANNER_ADMIN_SECRET=${SCANNER_ADMIN_SECRET:-}
+      # JSON-файл live-конфига отложенных ордеров
+      - PENDING_CONFIG_FILE=/data/pending_config.json
+    volumes:
+      - scanner-data:/data
     networks:
       - dokploy-network
 
 networks:
   dokploy-network:
     external: true
+
+volumes:
+  scanner-data:

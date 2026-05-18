@@ -13,6 +13,7 @@ services:
     environment:
       - EXECUTOR_API_SECRET=${EXECUTOR_API_SECRET:-change-me-to-a-real-secret}
       - MAX_OPEN_POSITIONS=${MAX_OPEN_POSITIONS:-5}
+      - MAX_PENDING_ORDERS=${MAX_PENDING_ORDERS:-10}
       - LOG_FILE=/opt/trade-executor/data/trades.log
       - TRADE_LOG_JSON=/opt/trade-executor/data/trades.jsonl
       - WINE_PYTHON=python

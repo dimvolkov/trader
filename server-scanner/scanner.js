@@ -1,6 +1,8 @@
 // Server-side Forex Scanner with Telegram notifications
 // Runs on schedule without browser, checks currency pairs and sends alerts
 
+const pendingConfig = require('./pending_config');
+
 // ─── Configuration from environment variables ───
 const CONFIG = {
     // Telegram
@@ -41,6 +43,9 @@ const CONFIG = {
     executorUrl: process.env.EXECUTOR_URL || '',           // e.g. http://your-server:8500
     executorSecret: process.env.EXECUTOR_API_SECRET || '', // shared secret
     autoTrade: process.env.AUTO_TRADE === 'true',          // enable auto-trading
+
+    // Admin secret for /api/pending-config write endpoint (settings UI)
+    adminSecret: process.env.SCANNER_ADMIN_SECRET || '',
 };
 
 const MAX_RISK = CONFIG.deposit * CONFIG.riskPct;
@@ -637,11 +642,75 @@ function formatBalance(acc) {
 }
 
 // ─── Trade Executor ───
+
+async function execFetch(method, path, body = null) {
+    const opts = {
+        method,
+        headers: {
+            'Content-Type': 'application/json',
+            'X-API-Secret': CONFIG.executorSecret,
+        },
+    };
+    if (body) opts.body = JSON.stringify(body);
+    const res = await fetchWithTimeout(`${CONFIG.executorUrl}${path}`, opts);
+    return res.json().catch(() => ({ success: false, error: `HTTP ${res.status}` }));
+}
+
+async function getPairWinrate(pair, days) {
+    try {
+        const data = await execFetch('GET', `/stats?days=${days}&pair=${encodeURIComponent(pair)}`);
+        if (!data.success) return null;
+        return {
+            trades: data.overall.trades,
+            winrate: data.overall.winrate,
+        };
+    } catch (err) {
+        log(`  ${pair}: stats fetch error — ${err.message}`);
+        return null;
+    }
+}
+
+async function getCurrentMarketPrice(pair) {
+    try {
+        const data = await execFetch('GET', `/symbol/${encodeURIComponent(pair.replace('/', ''))}`);
+        if (!data.success) return null;
+        return { bid: data.bid, ask: data.ask };
+    } catch {
+        return null;
+    }
+}
+
 async function sendOrderToExecutor(pair, result) {
     if (!CONFIG.executorUrl || !CONFIG.executorSecret || !CONFIG.autoTrade) {
         return;
     }
 
+    const pc = pendingConfig.get();
+    const e = result.entry;
+
+    // Common R:R override
+    if (typeof pc.min_rr === 'number' && e.rr < pc.min_rr) {
+        log(`  ${pair}: SKIPPED — R:R ${e.rr.toFixed(2)} < min_rr ${pc.min_rr}`);
+        return;
+    }
+
+    // Adaptive: skip if historical winrate on this pair is too low
+    if (pc.min_winrate_threshold > 0) {
+        const wr = await getPairWinrate(pair, pc.winrate_lookback_days);
+        if (wr && wr.trades >= pc.min_samples_for_winrate && wr.winrate < pc.min_winrate_threshold) {
+            log(`  ${pair}: SKIPPED — historic winrate ${(wr.winrate*100).toFixed(0)}% (${wr.trades} trades) < threshold ${(pc.min_winrate_threshold*100).toFixed(0)}%`);
+            return;
+        }
+    }
+
+    if (pc.use_pending) {
+        await placePendingOrder(pair, result, pc);
+    } else {
+        await placeMarketOrder(pair, result);
+    }
+}
+
+async function placeMarketOrder(pair, result) {
     const e = result.entry;
     const payload = {
         pair,
@@ -650,27 +719,92 @@ async function sendOrderToExecutor(pair, result) {
         stop: e.stop,
         take: e.take,
         rr: e.rr,
-        volume: 0, // auto-calculate on executor side
+        volume: 0,
         deposit: CONFIG.deposit,
         risk_pct: CONFIG.riskPct,
     };
+    try {
+        const data = await execFetch('POST', '/order', payload);
+        if (data.success) {
+            log(`  ${pair}: MARKET EXECUTED — id=${data.order_id} vol=${data.volume} price=${data.price}`);
+        } else {
+            log(`  ${pair}: MARKET FAILED — ${data.error}`);
+        }
+    } catch (err) {
+        log(`  ${pair}: EXECUTOR ERROR — ${err.message}`);
+    }
+}
+
+async function placePendingOrder(pair, result, pc) {
+    const e = result.entry;
+
+    // Drift filter: if market already moved >X% from entry towards take, R:R is gone
+    const market = await getCurrentMarketPrice(pair);
+    if (market) {
+        const refPrice = e.direction === 'up' ? market.ask : market.bid;
+        const totalDist = Math.abs(e.take - e.entry);
+        const moved = e.direction === 'up'
+            ? Math.max(0, refPrice - e.entry)
+            : Math.max(0, e.entry - refPrice);
+        if (totalDist > 0 && moved / totalDist > pc.max_distance_pct_from_entry) {
+            log(`  ${pair}: SKIPPED pending — price drifted ${((moved/totalDist)*100).toFixed(0)}% towards take (> ${(pc.max_distance_pct_from_entry*100).toFixed(0)}%)`);
+            return;
+        }
+    }
+
+    // Replace policy: cancel existing pending on this pair before placing new
+    if (pc.replace_existing_pending) {
+        try {
+            const cdata = await execFetch('POST', `/pending/cancel-by-pair/${encodeURIComponent(pair.replace('/', ''))}?reason=replace`);
+            if (cdata.success && cdata.cancelled && cdata.cancelled.length > 0) {
+                log(`  ${pair}: cancelled ${cdata.cancelled.length} old pending(s)`);
+            }
+        } catch (err) {
+            log(`  ${pair}: cancel-by-pair error — ${err.message}`);
+        }
+    }
+
+    // Hard cap on simultaneous pendings
+    try {
+        const list = await execFetch('GET', '/pending');
+        if (list.success && list.orders && list.orders.length >= pc.max_pending_total) {
+            log(`  ${pair}: SKIPPED pending — already ${list.orders.length} active (max ${pc.max_pending_total})`);
+            return;
+        }
+    } catch {}
+
+    const payload = {
+        pair,
+        direction: e.direction,
+        entry: e.entry,
+        stop: e.stop,
+        take: e.take,
+        rr: e.rr,
+        volume: 0,
+        deposit: CONFIG.deposit,
+        risk_pct: CONFIG.riskPct,
+        pending_type: pc.pending_type,
+        ttl_hours: pc.ttl_hours,
+        signal_context: {
+            trend: result.trend,
+            phase: result.phase,
+            s1: result.s1, s2: result.s2, s3: result.s3,
+            reversal: result.reversal,
+            reversalReason: result.reversalReason,
+            potentialProfit: e.potentialProfit,
+            potentialLoss: e.potentialLoss,
+            market_bid: market?.bid,
+            market_ask: market?.ask,
+        },
+        config_snapshot: { ...pc },
+    };
 
     try {
-        const res = await fetchWithTimeout(`${CONFIG.executorUrl}/order`, {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                'X-API-Secret': CONFIG.executorSecret,
-            },
-            body: JSON.stringify(payload),
-        });
-
-        const data = await res.json().catch(() => ({}));
-
+        const data = await execFetch('POST', '/pending', payload);
         if (data.success) {
-            log(`  ${pair}: ORDER EXECUTED — id=${data.order_id} vol=${data.volume} price=${data.price}`);
+            log(`  ${pair}: PENDING PLACED — ticket=${data.ticket} type=${data.order_type} entry=${data.entry}`);
         } else {
-            log(`  ${pair}: ORDER FAILED — ${data.error || res.status}`);
+            log(`  ${pair}: PENDING FAILED — ${data.error}`);
         }
     } catch (err) {
         log(`  ${pair}: EXECUTOR ERROR — ${err.message}`);
@@ -763,6 +897,9 @@ async function schedulerLoop() {
     log(`  Telegram: ${CONFIG.telegramBotToken ? 'configured' : 'NOT configured'}`);
     log(`  Auto-trade: ${CONFIG.autoTrade ? `ON → ${CONFIG.executorUrl}` : 'OFF'}`);
 
+    const pc = pendingConfig.get(true);
+    log(`  Pending: ${pc.use_pending ? `ON (type=${pc.pending_type}, ttl=${pc.ttl_hours}h)` : 'OFF (market orders)'}`);
+
     // Initial balance check on startup
     if (CONFIG.executorUrl && CONFIG.executorSecret) {
         const acc = await fetchAccountBalance();
@@ -771,6 +908,11 @@ async function schedulerLoop() {
         } else {
             log(`  ⚠ Executor configured but could not fetch account balance`);
         }
+    }
+
+    // Start pending-orders watcher (cancels stale / stop-breached pendings)
+    if (CONFIG.executorUrl && CONFIG.executorSecret) {
+        startPendingWatcher();
     }
 
     while (true) {
@@ -793,52 +935,216 @@ async function schedulerLoop() {
     }
 }
 
+// ─── Pending watcher ───
+// Periodically polls active pendings on executor and cancels them when
+// (a) market already breached the stop without filling, or (b) too old.
+
+let watcherTimer = null;
+
+async function pendingWatcherTick() {
+    if (!CONFIG.executorUrl || !CONFIG.executorSecret) return;
+    const pc = pendingConfig.get();
+    if (!pc.use_pending) return;
+    if (!pc.cancel_on_stop_breach && (!pc.watcher_max_age_hours || pc.watcher_max_age_hours <= 0)) return;
+
+    let list;
+    try {
+        list = await execFetch('GET', '/pending');
+    } catch (err) {
+        log(`[watcher] list error: ${err.message}`);
+        return;
+    }
+    if (!list?.success || !list.orders?.length) return;
+
+    const nowSec = Math.floor(Date.now() / 1000);
+    const maxAgeSec = (pc.watcher_max_age_hours || 0) * 3600;
+
+    for (const o of list.orders) {
+        const reasonsToCancel = [];
+
+        // Age check
+        if (maxAgeSec > 0 && o.time_setup && (nowSec - o.time_setup) > maxAgeSec) {
+            const ageH = ((nowSec - o.time_setup) / 3600).toFixed(1);
+            reasonsToCancel.push(`age ${ageH}h > ${pc.watcher_max_age_hours}h`);
+        }
+
+        // Stop breach check
+        if (pc.cancel_on_stop_breach && o.sl) {
+            const sym = await execFetch('GET', `/symbol/${o.symbol}`);
+            if (sym?.success) {
+                const isBuy = o.type === 'buy_limit' || o.type === 'buy_stop';
+                const price = isBuy ? sym.bid : sym.ask;
+                if (isBuy && price <= o.sl) reasonsToCancel.push(`bid ${price} <= SL ${o.sl}`);
+                else if (!isBuy && price >= o.sl) reasonsToCancel.push(`ask ${price} >= SL ${o.sl}`);
+            }
+        }
+
+        if (reasonsToCancel.length > 0) {
+            const reason = reasonsToCancel.join(', ');
+            try {
+                await execFetch('DELETE', `/pending/${o.ticket}?reason=${encodeURIComponent('watcher: ' + reason)}`);
+                log(`[watcher] cancelled ${o.symbol} ticket=${o.ticket} — ${reason}`);
+            } catch (err) {
+                log(`[watcher] cancel ${o.ticket} error: ${err.message}`);
+            }
+        }
+    }
+}
+
+function startPendingWatcher() {
+    const pc = pendingConfig.get();
+    const intervalMs = Math.max(1, pc.watcher_interval_minutes) * 60 * 1000;
+    if (watcherTimer) clearInterval(watcherTimer);
+    watcherTimer = setInterval(() => {
+        pendingWatcherTick().catch(err => log(`[watcher] tick error: ${err.message}`));
+    }, intervalMs);
+    log(`Pending watcher started, every ${pc.watcher_interval_minutes}m`);
+}
+
 // ─── HTTP API for frontend ───
 const http = require('http');
+const url = require('url');
 const API_PORT = process.env.SCANNER_API_PORT || 3001;
+
+function jsonBody(req) {
+    return new Promise((resolve, reject) => {
+        const chunks = [];
+        req.on('data', c => chunks.push(c));
+        req.on('end', () => {
+            const raw = Buffer.concat(chunks).toString('utf-8');
+            if (!raw) return resolve({});
+            try { resolve(JSON.parse(raw)); }
+            catch (err) { reject(err); }
+        });
+        req.on('error', reject);
+    });
+}
+
+function reply(res, status, body) {
+    res.statusCode = status;
+    res.end(JSON.stringify(body));
+}
+
+function requireAdmin(req) {
+    if (!CONFIG.adminSecret) return false;
+    return req.headers['x-admin-secret'] === CONFIG.adminSecret;
+}
+
+async function proxyExecutor(req, res, path) {
+    if (!CONFIG.executorUrl || !CONFIG.executorSecret) {
+        return reply(res, 503, { success: false, error: 'Executor not configured' });
+    }
+    try {
+        const method = req.method;
+        const opts = {
+            method,
+            headers: { 'X-API-Secret': CONFIG.executorSecret },
+        };
+        if (method !== 'GET' && method !== 'DELETE') {
+            opts.headers['Content-Type'] = 'application/json';
+            const body = await jsonBody(req);
+            opts.body = JSON.stringify(body);
+        }
+        const r = await fetchWithTimeout(`${CONFIG.executorUrl}${path}`, opts);
+        const data = await r.json().catch(() => ({}));
+        return reply(res, r.status, data);
+    } catch (err) {
+        return reply(res, 502, { success: false, error: err.message });
+    }
+}
 
 const apiServer = http.createServer(async (req, res) => {
     res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-Admin-Secret');
     res.setHeader('Content-Type', 'application/json');
 
-    if (req.url === '/api/balance') {
-        if (!CONFIG.executorUrl || !CONFIG.executorSecret) {
-            res.statusCode = 503;
-            res.end(JSON.stringify({ success: false, error: 'Executor not configured' }));
-            return;
+    if (req.method === 'OPTIONS') {
+        res.statusCode = 204;
+        res.end();
+        return;
+    }
+
+    const parsed = url.parse(req.url, true);
+    const p = parsed.pathname;
+
+    try {
+        if (p === '/api/balance') {
+            if (!CONFIG.executorUrl || !CONFIG.executorSecret) {
+                return reply(res, 503, { success: false, error: 'Executor not configured' });
+            }
+            const acc = lastAccountInfo || await fetchAccountBalance();
+            if (acc) {
+                return reply(res, 200, { success: true, balance: acc.balance, equity: acc.equity, free_margin: acc.free_margin, currency: acc.currency, leverage: acc.leverage });
+            }
+            return reply(res, 503, { success: false, error: 'MT5 unavailable' });
         }
-        const acc = lastAccountInfo || await fetchAccountBalance();
-        if (acc) {
-            res.end(JSON.stringify({ success: true, balance: acc.balance, equity: acc.equity, free_margin: acc.free_margin, currency: acc.currency, leverage: acc.leverage }));
-        } else {
-            res.statusCode = 503;
-            res.end(JSON.stringify({ success: false, error: 'MT5 unavailable' }));
-        }
-    } else if (req.url === '/api/send-balance-telegram') {
-        if (!CONFIG.telegramBotToken || !CONFIG.telegramChatId) {
-            res.statusCode = 503;
-            res.end(JSON.stringify({ success: false, error: 'Telegram not configured' }));
-            return;
-        }
-        const acc = lastAccountInfo || await fetchAccountBalance();
-        if (acc) {
+
+        if (p === '/api/send-balance-telegram') {
+            if (!CONFIG.telegramBotToken || !CONFIG.telegramChatId) {
+                return reply(res, 503, { success: false, error: 'Telegram not configured' });
+            }
+            const acc = lastAccountInfo || await fetchAccountBalance();
+            if (!acc) return reply(res, 503, { success: false, error: 'MT5 unavailable' });
             const fmt = (v) => v.toLocaleString('ru-RU', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
             await sendTelegram([
-                `💰 *Баланс счёта*`,
-                ``,
+                `💰 *Баланс счёта*`, ``,
                 `Баланс: \`${fmt(acc.balance)} ${acc.currency}\``,
                 `Эквити: \`${fmt(acc.equity)} ${acc.currency}\``,
                 `Свободная маржа: \`${fmt(acc.free_margin)} ${acc.currency}\``,
                 `Плечо: 1:${acc.leverage}`,
             ].join('\n'));
-            res.end(JSON.stringify({ success: true }));
-        } else {
-            res.statusCode = 503;
-            res.end(JSON.stringify({ success: false, error: 'MT5 unavailable' }));
+            return reply(res, 200, { success: true });
         }
-    } else {
-        res.statusCode = 404;
-        res.end(JSON.stringify({ error: 'not found' }));
+
+        // ─── Pending config (live-editable settings) ───
+        if (p === '/api/pending-config' && req.method === 'GET') {
+            return reply(res, 200, {
+                success: true,
+                config: pendingConfig.get(true),
+                defaults: pendingConfig.defaults(),
+            });
+        }
+        if (p === '/api/pending-config' && req.method === 'POST') {
+            if (!requireAdmin(req)) return reply(res, 401, { success: false, error: 'admin secret required' });
+            let patch;
+            try { patch = await jsonBody(req); }
+            catch (e) { return reply(res, 400, { success: false, error: 'bad JSON' }); }
+            const r = pendingConfig.update(patch);
+            if (!r.success) return reply(res, 400, r);
+            startPendingWatcher();   // re-init in case interval changed
+            return reply(res, 200, r);
+        }
+
+        // ─── Executor proxies (admin-gated) ───
+        if (p === '/api/pending-list' && req.method === 'GET') {
+            if (!requireAdmin(req)) return reply(res, 401, { success: false, error: 'admin secret required' });
+            return proxyExecutor(req, res, '/pending');
+        }
+        if (p.startsWith('/api/pending-cancel/') && req.method === 'DELETE') {
+            if (!requireAdmin(req)) return reply(res, 401, { success: false, error: 'admin secret required' });
+            const ticket = p.split('/').pop();
+            return proxyExecutor(req, res, `/pending/${ticket}?reason=manual_ui`);
+        }
+        if (p === '/api/stats' && req.method === 'GET') {
+            if (!requireAdmin(req)) return reply(res, 401, { success: false, error: 'admin secret required' });
+            const qs = parsed.search || '';
+            return proxyExecutor(req, res, `/stats${qs}`);
+        }
+        if (p === '/api/analysis' && req.method === 'GET') {
+            if (!requireAdmin(req)) return reply(res, 401, { success: false, error: 'admin secret required' });
+            const qs = parsed.search || '';
+            return proxyExecutor(req, res, `/analysis${qs}`);
+        }
+        if (p === '/api/history' && req.method === 'GET') {
+            if (!requireAdmin(req)) return reply(res, 401, { success: false, error: 'admin secret required' });
+            const qs = parsed.search || '';
+            return proxyExecutor(req, res, `/history${qs}`);
+        }
+
+        return reply(res, 404, { error: 'not found' });
+    } catch (err) {
+        return reply(res, 500, { success: false, error: err.message });
     }
 });
 
