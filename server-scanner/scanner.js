@@ -469,11 +469,12 @@ function computeEntry(slom, levels, trend) {
     if (!slom || !slom.signal2 || !levels.target) return null;
     const entry = slom.signal2.price;
     let stop, take;
+    const buffer = Math.abs(slom.signal2.price - slom.signal1.price) * 0.5;
     if (trend === 'up') {
-        stop = slom.signal1.price - Math.abs(slom.signal2.price - slom.signal1.price) * 0.5;
+        stop = entry - buffer;
         take = levels.target;
     } else {
-        stop = slom.signal1.price + Math.abs(slom.signal2.price - slom.signal1.price) * 0.5;
+        stop = entry + buffer;
         take = levels.target;
     }
     const riskPerUnit = Math.abs(entry - stop);
