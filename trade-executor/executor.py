@@ -447,7 +447,7 @@ async def history_mt5(
 async def journal(
     days: int = Query(30, ge=1, le=365),
     pair: Optional[str] = None,
-    status: Optional[str] = Query(None, description="filter: placed|filled|cancelled|expired|failed|closed"),
+    status_filter: Optional[str] = Query(None, alias="status", description="filter: placed|filled|cancelled|expired|failed|closed"),
     x_api_secret: str = Header(None),
 ):
     """
@@ -621,8 +621,8 @@ async def journal(
     # Sort: newest first
     rows.sort(key=lambda r: r.get("timestamp") or "", reverse=True)
 
-    if status:
-        rows = [r for r in rows if r["status"] == status]
+    if status_filter:
+        rows = [r for r in rows if r["status"] == status_filter]
 
     # Summary
     total = len(rows)
