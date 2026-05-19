@@ -3,6 +3,7 @@
 
 const pendingConfig = require('./pending_config');
 const auth = require('./auth');
+const aiAgent = require('./ai-agent');
 auth.init();
 
 // ─── Configuration from environment variables ───
@@ -77,6 +78,15 @@ function getMoscowHour() {
     const utcMinutes = now.getUTCHours() * 60 + now.getUTCMinutes();
     const mskMinutes = utcMinutes + mskOffset;
     return Math.floor(((mskMinutes % 1440) + 1440) % 1440 / 60);
+}
+
+function getMoscowWeekday() {
+    // Returns 0=Mon..6=Sun in MSK timezone.
+    const now = new Date();
+    const mskMs = now.getTime() + (3 * 60 * 60 * 1000);
+    const mskDate = new Date(mskMs);
+    // getUTCDay returns 0=Sun..6=Sat; remap to 0=Mon..6=Sun
+    return (mskDate.getUTCDay() + 6) % 7;
 }
 
 function isInTimeWindow() {
@@ -412,9 +422,12 @@ function constructLevels(impulses, trend, swings) {
     return { impulseEnd, impulseStart, target };
 }
 
-function detectSlom(m30Candles, trendDir, h1Levels) {
+function detectSlom(m30Candles, trendDir, h1Levels, pc) {
     if (!h1Levels.impulseEnd) return null;
-    const m30Swings = findSwingPoints(m30Candles, 4);
+    const lookback = pc.m30_swing_lookback;
+    const pullbackRatio = pc.pullback_zone_ratio;
+    const tol = pc.breakout_tolerance_pct;
+    const m30Swings = findSwingPoints(m30Candles, lookback);
     if (m30Swings.length < 4) return null;
     const recentSwings = m30Swings.slice(-10);
     const microHighs = recentSwings.filter(s => s.type === 'high');
@@ -429,9 +442,9 @@ function detectSlom(m30Candles, trendDir, h1Levels) {
         const breakLevel = lastMicroHighs[lastMicroHighs.length - 2].price;
         if (microTop.price > breakLevel) {
             signal1 = { price: breakLevel, time: microTop.time };
-            const pullbackZone = breakLevel + (microTop.price - breakLevel) * 0.5;
+            const pullbackZone = breakLevel + (microTop.price - breakLevel) * pullbackRatio;
             for (let i = microTop.index + 1; i < m30Candles.length; i++) {
-                if (m30Candles[i].low <= pullbackZone && m30Candles[i].low >= breakLevel * 0.999) {
+                if (m30Candles[i].low <= pullbackZone && m30Candles[i].low >= breakLevel * (1 - tol)) {
                     signal2 = { price: m30Candles[i].low, time: m30Candles[i].time };
                     break;
                 }
@@ -450,9 +463,9 @@ function detectSlom(m30Candles, trendDir, h1Levels) {
         const breakLevel = lastMicroLows[lastMicroLows.length - 2].price;
         if (microBottom.price < breakLevel) {
             signal1 = { price: breakLevel, time: microBottom.time };
-            const pullbackZone = breakLevel - (breakLevel - microBottom.price) * 0.5;
+            const pullbackZone = breakLevel - (breakLevel - microBottom.price) * pullbackRatio;
             for (let i = microBottom.index + 1; i < m30Candles.length; i++) {
-                if (m30Candles[i].high >= pullbackZone && m30Candles[i].high <= breakLevel * 1.001) {
+                if (m30Candles[i].high >= pullbackZone && m30Candles[i].high <= breakLevel * (1 + tol)) {
                     signal2 = { price: m30Candles[i].high, time: m30Candles[i].time };
                     break;
                 }
@@ -471,11 +484,13 @@ function detectSlom(m30Candles, trendDir, h1Levels) {
     return { signal1, signal2: signal2 || null, signal3: signal3 || null, complete: !!(signal1 && signal2 && signal3) };
 }
 
-function computeEntry(slom, levels, trend) {
+function computeEntry(slom, levels, trend, pc) {
     if (!slom || !slom.signal2 || !levels.target) return null;
     const entry = slom.signal2.price;
+    const bufferRatio = pc.stop_buffer_ratio;
+    const minRr = pc.min_rr;
     let stop, take;
-    const buffer = Math.abs(slom.signal2.price - slom.signal1.price) * 0.5;
+    const buffer = Math.abs(slom.signal2.price - slom.signal1.price) * bufferRatio;
     if (trend === 'up') {
         stop = entry - buffer;
         take = levels.target;
@@ -491,11 +506,12 @@ function computeEntry(slom, levels, trend) {
     const potentialLoss = MAX_RISK;
 
     const base = { entry, stop, take, rr, direction: trend, positionSize, potentialProfit, potentialLoss };
-    if (rr < 3.0) return { ...base, valid: false, reason: `R:R ${rr.toFixed(2)} < 3.0` };
+    if (rr < minRr) return { ...base, valid: false, reason: `R:R ${rr.toFixed(2)} < ${minRr.toFixed(2)}` };
     return { ...base, valid: true, reason: `R:R = ${rr.toFixed(2)}` };
 }
 
-function analyzePair(h1Candles, m30Candles) {
+function analyzePair(h1Candles, m30Candles, pc) {
+    pc = pc || pendingConfig.get();
     const result = {
         trend: 'range', phase: '—',
         reversal: false, reversalReason: '',
@@ -504,10 +520,10 @@ function analyzePair(h1Candles, m30Candles) {
         h1Count: h1Candles.length, m30Count: m30Candles.length,
     };
 
-    if (h1Candles.length < 20) return result;
+    if (h1Candles.length < pc.min_h1_candles) return result;
 
-    const swings = findSwingPoints(h1Candles, 5);
-    if (swings.length < 4) return result;
+    const swings = findSwingPoints(h1Candles, pc.h1_swing_lookback);
+    if (swings.length < pc.min_swings_required) return result;
 
     result.trend = determineTrend(swings);
     const impulses = segmentSwings(swings, result.trend);
@@ -524,14 +540,14 @@ function analyzePair(h1Candles, m30Candles) {
         const levels = constructLevels(impulses, result.trend, swings);
         result.levels = levels;
 
-        if (m30Candles.length > 20) {
-            const slom = detectSlom(m30Candles, result.trend, levels);
+        if (m30Candles.length > pc.min_h1_candles) {
+            const slom = detectSlom(m30Candles, result.trend, levels, pc);
             if (slom) {
                 result.s1 = !!slom.signal1;
                 result.s2 = !!slom.signal2;
                 result.s3 = !!slom.signal3;
                 if (slom.signal2) {
-                    const entry = computeEntry(slom, levels, result.trend);
+                    const entry = computeEntry(slom, levels, result.trend, pc);
                     if (entry) {
                         result.entry = entry;
                         result.rr = entry.rr;
@@ -731,6 +747,8 @@ async function sendOrderToExecutor(pair, result) {
 
 async function placeMarketOrder(pair, result) {
     const e = result.entry;
+    const pc = pendingConfig.get();
+    const riskPct = (pc.pair_risk_overrides && pc.pair_risk_overrides[pair]) || CONFIG.riskPct;
     const payload = {
         pair,
         direction: e.direction,
@@ -740,7 +758,7 @@ async function placeMarketOrder(pair, result) {
         rr: e.rr,
         volume: 0,
         deposit: CONFIG.deposit,
-        risk_pct: CONFIG.riskPct,
+        risk_pct: riskPct,
     };
     try {
         const data = await execFetch('POST', '/order', payload);
@@ -792,6 +810,7 @@ async function placePendingOrder(pair, result, pc) {
         }
     } catch {}
 
+    const riskPct = (pc.pair_risk_overrides && pc.pair_risk_overrides[pair]) || CONFIG.riskPct;
     const payload = {
         pair,
         direction: e.direction,
@@ -801,7 +820,7 @@ async function placePendingOrder(pair, result, pc) {
         rr: e.rr,
         volume: 0,
         deposit: CONFIG.deposit,
-        risk_pct: CONFIG.riskPct,
+        risk_pct: riskPct,
         pending_type: pc.pending_type,
         ttl_hours: pc.ttl_hours,
         signal_context: {
@@ -832,10 +851,32 @@ async function placePendingOrder(pair, result, pc) {
 
 // ─── Main Scan Cycle ───
 async function runScanCycle() {
-    const pairs = CONFIG.watchlist;
+    const pcInitial = pendingConfig.get(true);
     const rateDelay = RATE_DELAYS[CONFIG.dataSource] || 12000;
 
-    log(`=== Scan started: ${pairs.length} pairs [${CONFIG.dataSource}] ===`);
+    // Apply per-pair filter (blacklist) and time-window filter from live config.
+    const blacklist = new Set(pcInitial.pair_blacklist || []);
+    const pairs = CONFIG.watchlist.filter(p => !blacklist.has(p));
+    const skipped = CONFIG.watchlist.filter(p => blacklist.has(p));
+
+    // Day-of-week filter (MSK).
+    if (Array.isArray(pcInitial.allowed_weekdays) && pcInitial.allowed_weekdays.length > 0) {
+        const dow = getMoscowWeekday();
+        if (!pcInitial.allowed_weekdays.includes(dow)) {
+            log(`Skipping scan: MSK weekday ${dow} not in allowed_weekdays ${JSON.stringify(pcInitial.allowed_weekdays)}`);
+            return;
+        }
+    }
+    // Hour-of-day filter (MSK), in addition to scheduleFrom/scheduleTo.
+    if (Array.isArray(pcInitial.allowed_hours_msk) && pcInitial.allowed_hours_msk.length > 0) {
+        const h = getMoscowHour();
+        if (!pcInitial.allowed_hours_msk.includes(h)) {
+            log(`Skipping scan: MSK hour ${h} not in allowed_hours_msk ${JSON.stringify(pcInitial.allowed_hours_msk)}`);
+            return;
+        }
+    }
+
+    log(`=== Scan started: ${pairs.length} pairs [${CONFIG.dataSource}]${skipped.length ? ` (blacklisted: ${skipped.join(',')})` : ''} ===`);
 
     // Fetch actual account balance from MT5
     const acc = await fetchAccountBalance();
@@ -872,7 +913,8 @@ async function runScanCycle() {
             await delay(rateDelay);
             const m30 = await fetchTimeSeries(pair, '30min');
 
-            const result = analyzePair(h1, m30);
+            const pc = pendingConfig.get();
+            const result = analyzePair(h1, m30, pc);
             log(`  ${pair}: trend=${result.trend} phase=${result.phase} H1=${result.h1Count} M30=${result.m30Count} S1=${result.s1} S2=${result.s2} S3=${result.s3}`);
 
             if (result.entry && result.entry.valid) {
@@ -932,6 +974,15 @@ async function schedulerLoop() {
     // Start pending-orders watcher (cancels stale / stop-breached pendings)
     if (CONFIG.executorUrl && CONFIG.executorSecret) {
         startPendingWatcher();
+    }
+
+    // Start AI agent daily scheduler (analysis + recommendations)
+    if (process.env.AI_AGENT_ENABLED === 'true' && CONFIG.anthropicApiKey
+        && CONFIG.executorUrl && CONFIG.executorSecret) {
+        aiAgent.startDailyScheduler({
+            CONFIG, execFetch, sendTelegram, fetchWithTimeout,
+            strategyDoc: STRATEGY_DOC,
+        });
     }
 
     while (true) {
@@ -1062,28 +1113,52 @@ const STRATEGY_DOC = (() => {
     }
 })();
 
-const STRATEGY_SYSTEM_PROMPT = [
-    'Ты — ассистент по торговой стратегии «Слом» (breakout по импульсам и коррекциям).',
-    'Отвечай по-русски, кратко и конкретно. Опирайся ТОЛЬКО на материалы ниже.',
-    'Если вопрос вне темы стратегии — мягко перенаправь к ней.',
-    'Если пользователь предлагает изменения параметров — обсуждай как идеи, не как готовые решения;',
-    'не выдавай рекомендации как финансовые советы.',
-    '',
-    '=== Полный мануал стратегии ===',
-    STRATEGY_DOC || '(документ не загружен)',
-    '',
-    '=== Параметры, зашитые в scanner.js ===',
-    '- Минимальный R:R для сигнала: 3.0',
-    '- Lookback свингов на H1: 5 свечей',
-    '- Lookback свингов на M30: 4 свечи',
-    '- Буфер стоп-лосса: 50% расстояния между Сигналом 1 и Сигналом 2',
-    '- Глубина анализа: 200 свечей (twelvedata) / 150 свечей (остальные источники)',
-    '- Условия тренда H1: 2+ повышающихся максимумов и 2+ повышающихся минимумов (для up; зеркально для down)',
-].join('\n');
+function buildStrategySystemPrompt() {
+    const pc = pendingConfig.get();
+    return [
+        'Ты — ассистент по торговой стратегии «Слом» (breakout по импульсам и коррекциям).',
+        'Отвечай по-русски, кратко и конкретно. Опирайся ТОЛЬКО на материалы ниже.',
+        'Если вопрос вне темы стратегии — мягко перенаправь к ней.',
+        'Если пользователь предлагает изменения параметров — обсуждай как идеи, не как готовые решения;',
+        'не выдавай рекомендации как финансовые советы.',
+        '',
+        '=== Полный мануал стратегии ===',
+        STRATEGY_DOC || '(документ не загружен)',
+        '',
+        '=== Текущие настраиваемые параметры (pending_config) ===',
+        `- Минимальный R:R для сигнала: ${pc.min_rr}`,
+        `- Lookback свингов на H1: ${pc.h1_swing_lookback} свечей`,
+        `- Lookback свингов на M30: ${pc.m30_swing_lookback} свечей`,
+        `- Pullback ratio (зона Сигнала 2): ${pc.pullback_zone_ratio}`,
+        `- Допуск к breakLevel: ±${(pc.breakout_tolerance_pct * 100).toFixed(2)}%`,
+        `- Буфер стоп-лосса: ${pc.stop_buffer_ratio} × |S2-S1|`,
+        `- Минимум свечей H1 для анализа: ${pc.min_h1_candles}`,
+        `- Минимум свингов: ${pc.min_swings_required}`,
+        '- Глубина анализа: 200 свечей (twelvedata) / 150 свечей (остальные источники)',
+        '- Условия тренда H1: 2+ повышающихся максимумов и 2+ повышающихся минимумов (для up; зеркально для down)',
+    ].join('\n');
+}
 
 const CHAT_RATE_WINDOW_MS = 60_000;
 const CHAT_RATE_LIMIT = 15;
 const chatRateBuckets = new Map();
+
+// Manual /api/agent/trigger: 1 per 10 minutes per IP
+const AGENT_TRIGGER_WINDOW_MS = 10 * 60 * 1000;
+const AGENT_TRIGGER_LIMIT = 1;
+const agentTriggerBuckets = new Map();
+
+function agentTriggerAllow(ip) {
+    const now = Date.now();
+    const bucket = (agentTriggerBuckets.get(ip) || []).filter(t => now - t < AGENT_TRIGGER_WINDOW_MS);
+    if (bucket.length >= AGENT_TRIGGER_LIMIT) {
+        agentTriggerBuckets.set(ip, bucket);
+        return false;
+    }
+    bucket.push(now);
+    agentTriggerBuckets.set(ip, bucket);
+    return true;
+}
 
 function chatRateAllow(ip) {
     const now = Date.now();
@@ -1143,7 +1218,7 @@ async function handleChat(req, res) {
         temperature: 0.3,
         system: [{
             type: 'text',
-            text: STRATEGY_SYSTEM_PROMPT,
+            text: buildStrategySystemPrompt(),
             cache_control: { type: 'ephemeral' },
         }],
         messages: messages.map(m => ({ role: m.role, content: m.content })),
@@ -1456,6 +1531,81 @@ const apiServer = http.createServer(async (req, res) => {
             return proxyExecutor(req, res, `/journal${qs}`);
         }
 
+        // ─── AI Agent endpoints ───
+        if (p === '/api/agent/recommendations' && req.method === 'GET') {
+            if (!requireAdmin(req)) return reply(res, 401, { success: false, error: 'admin secret required' });
+            const status = parsed.query.status || null;
+            const limit = parseInt(parsed.query.limit || '50', 10);
+            try {
+                const recs = aiAgent.getRecommendations({ status, limit });
+                return reply(res, 200, { success: true, recommendations: recs });
+            } catch (err) {
+                return reply(res, 500, { success: false, error: err.message });
+            }
+        }
+        if (p.startsWith('/api/agent/recommendation/') && req.method === 'GET') {
+            if (!requireAdmin(req)) return reply(res, 401, { success: false, error: 'admin secret required' });
+            const id = decodeURIComponent(p.replace('/api/agent/recommendation/', ''));
+            const rec = aiAgent.getRecommendation(id);
+            if (!rec) return reply(res, 404, { success: false, error: 'not found' });
+            return reply(res, 200, { success: true, recommendation: rec });
+        }
+        if (p === '/api/agent/apply' && req.method === 'POST') {
+            if (!requireAdmin(req)) return reply(res, 401, { success: false, error: 'admin secret required' });
+            let body;
+            try { body = await jsonBody(req); }
+            catch { return reply(res, 400, { success: false, error: 'bad JSON' }); }
+            const session = auth.getSessionFromRequest(req);
+            const r = aiAgent.applyRecommendation(
+                body.recommendation_id, body.proposal_id,
+                session && session.email
+            );
+            if (!r.ok) return reply(res, 400, { success: false, error: r.error });
+            startPendingWatcher();   // re-init in case watcher_interval changed
+            return reply(res, 200, { success: true, before: r.before, after: r.after, diff: r.diff });
+        }
+        if (p === '/api/agent/dismiss' && req.method === 'POST') {
+            if (!requireAdmin(req)) return reply(res, 401, { success: false, error: 'admin secret required' });
+            let body;
+            try { body = await jsonBody(req); }
+            catch { return reply(res, 400, { success: false, error: 'bad JSON' }); }
+            const session = auth.getSessionFromRequest(req);
+            const r = aiAgent.dismissRecommendation(
+                body.recommendation_id, body.proposal_id, body.reason,
+                session && session.email
+            );
+            if (!r.ok) return reply(res, 400, { success: false, error: r.error });
+            return reply(res, 200, { success: true });
+        }
+        if (p === '/api/agent/history' && req.method === 'GET') {
+            if (!requireAdmin(req)) return reply(res, 401, { success: false, error: 'admin secret required' });
+            try {
+                const h = await aiAgent.getHistory({ execFetch });
+                return reply(res, 200, { success: true, ...h });
+            } catch (err) {
+                return reply(res, 500, { success: false, error: err.message });
+            }
+        }
+        if (p === '/api/agent/trigger' && req.method === 'POST') {
+            if (!requireAdmin(req)) return reply(res, 401, { success: false, error: 'admin secret required' });
+            if (!agentTriggerAllow(clientIp(req))) {
+                return reply(res, 429, { success: false, error: 'too many triggers, max 1 per 10 min' });
+            }
+            if (aiAgent.isRunning()) {
+                return reply(res, 409, { success: false, error: 'agent already running' });
+            }
+            try {
+                const r = await aiAgent.manualRun({
+                    CONFIG, execFetch, sendTelegram, fetchWithTimeout,
+                    strategyDoc: STRATEGY_DOC,
+                });
+                if (!r.ok) return reply(res, 502, { success: false, error: r.error });
+                return reply(res, 200, { success: true, report_id: r.report_id, proposals: r.proposals });
+            } catch (err) {
+                return reply(res, 500, { success: false, error: err.message });
+            }
+        }
+
         // ─── Manual pending order: place an order from a pattern detected in UI ───
         if (p === '/api/manual-pending' && req.method === 'POST') {
             if (!requireAdmin(req)) return reply(res, 401, { success: false, error: 'admin secret required' });
@@ -1598,6 +1748,18 @@ if (process.argv.includes('--test-telegram')) {
         log('Test message sent');
     })().catch(err => {
         log(`Test error: ${err.message}`);
+        process.exit(1);
+    });
+} else if (process.argv.includes('--test-agent-digest')) {
+    (async () => {
+        log('Running AI agent (manual one-shot, sends digest)...');
+        const r = await aiAgent.manualRun({
+            CONFIG, execFetch, sendTelegram, fetchWithTimeout,
+            strategyDoc: STRATEGY_DOC,
+        });
+        log(`Agent result: ${JSON.stringify(r)}`);
+    })().catch(err => {
+        log(`Agent test error: ${err.message}`);
         process.exit(1);
     });
 } else {

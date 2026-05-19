@@ -652,42 +652,160 @@ async def journal(
     return {"success": True, "summary": summary, "rows": rows}
 
 
-def _stats_for_deals(deals: List[dict]) -> Dict[str, Any]:
-    """Compute winrate, totals from a list of deals (only 'out' deals carry profit)."""
+def _empty_stats() -> Dict[str, Any]:
+    return {
+        "trades": 0, "wins": 0, "losses": 0, "winrate": 0.0,
+        "total_profit": 0.0, "avg_profit": 0.0, "best": 0.0, "worst": 0.0,
+        "profit_factor": 0.0, "max_drawdown": 0.0,
+        "consecutive_wins": 0, "consecutive_losses": 0,
+        "avg_win": 0.0, "avg_loss": 0.0, "expectancy": 0.0,
+    }
+
+
+def _stats_for_deals(deals: List[dict], include_curve: bool = False) -> Dict[str, Any]:
+    """Compute winrate + risk metrics from a list of deals (only 'out' deals carry profit)."""
     outs = [d for d in deals if d.get("entry") == 1]   # entry=1 → out (closing)
     if not outs:
-        return {"trades": 0, "wins": 0, "losses": 0, "winrate": 0.0,
-                "total_profit": 0.0, "avg_profit": 0.0, "best": 0.0, "worst": 0.0}
+        return _empty_stats()
+    # Time-sort outs for streak and drawdown calculations
+    outs_sorted = sorted(outs, key=lambda d: d.get("time") or 0)
     wins = [d for d in outs if d["profit"] > 0]
     losses = [d for d in outs if d["profit"] <= 0]
     total = sum(d["profit"] + d.get("swap", 0) + d.get("commission", 0) for d in outs)
     profits = [d["profit"] for d in outs]
-    return {
+
+    # Profit factor
+    gross_win = sum(p for p in profits if p > 0)
+    gross_loss = abs(sum(p for p in profits if p < 0))
+    profit_factor = round(gross_win / gross_loss, 3) if gross_loss > 0 else (gross_win if gross_win > 0 else 0.0)
+
+    # Max drawdown (running equity curve)
+    cum = 0.0
+    peak = 0.0
+    max_dd = 0.0
+    curve = []
+    for d in outs_sorted:
+        cum += d["profit"]
+        if cum > peak:
+            peak = cum
+        dd = peak - cum
+        if dd > max_dd:
+            max_dd = dd
+        if include_curve:
+            curve.append({"time": d.get("time"), "cum_profit": round(cum, 2)})
+
+    # Consecutive wins/losses
+    cur_w, cur_l, max_w, max_l = 0, 0, 0, 0
+    for d in outs_sorted:
+        if d["profit"] > 0:
+            cur_w += 1; cur_l = 0
+            if cur_w > max_w: max_w = cur_w
+        else:
+            cur_l += 1; cur_w = 0
+            if cur_l > max_l: max_l = cur_l
+
+    avg_win = round(gross_win / len(wins), 2) if wins else 0.0
+    avg_loss = round(gross_loss / len(losses), 2) if losses else 0.0
+    winrate = len(wins) / len(outs)
+    expectancy = round(winrate * avg_win - (1 - winrate) * avg_loss, 2)
+
+    result = {
         "trades": len(outs),
         "wins": len(wins),
         "losses": len(losses),
-        "winrate": round(len(wins) / len(outs), 3),
+        "winrate": round(winrate, 3),
         "total_profit": round(total, 2),
         "avg_profit": round(sum(profits) / len(profits), 2),
         "best": round(max(profits), 2),
         "worst": round(min(profits), 2),
+        "profit_factor": profit_factor,
+        "max_drawdown": round(max_dd, 2),
+        "consecutive_wins": max_w,
+        "consecutive_losses": max_l,
+        "avg_win": avg_win,
+        "avg_loss": avg_loss,
+        "expectancy": expectancy,
     }
+    if include_curve:
+        result["equity_curve"] = curve
+    return result
+
+
+def _stats_by_hour(deals: List[dict]) -> Dict[int, Dict[str, Any]]:
+    """Bucket out-deals by MSK hour (UTC+3)."""
+    buckets: Dict[int, List[dict]] = {}
+    for d in deals:
+        if d.get("entry") != 1:
+            continue
+        ts = d.get("time")
+        if not ts:
+            continue
+        hour_msk = ((datetime.fromtimestamp(ts, tz=timezone.utc).hour + 3) % 24)
+        buckets.setdefault(hour_msk, []).append(d)
+    return {h: _stats_for_deals(ds) for h, ds in sorted(buckets.items())}
+
+
+def _stats_by_weekday(deals: List[dict]) -> Dict[int, Dict[str, Any]]:
+    """Bucket out-deals by MSK weekday (0=Mon..6=Sun)."""
+    buckets: Dict[int, List[dict]] = {}
+    for d in deals:
+        if d.get("entry") != 1:
+            continue
+        ts = d.get("time")
+        if not ts:
+            continue
+        msk_dt = datetime.fromtimestamp(ts, tz=timezone.utc) + timedelta(hours=3)
+        dow = msk_dt.weekday()  # 0=Mon..6=Sun
+        buckets.setdefault(dow, []).append(d)
+    return {d: _stats_for_deals(ds) for d, ds in sorted(buckets.items())}
+
+
+def _stats_by_signal_context(local_records: List[dict], orders: List[dict], deals: List[dict]) -> Dict[str, Dict[str, Any]]:
+    """Group pending attempts by signal_context.trend / .reversal and compute outcome stats."""
+    # Build ticket → position_id → out-deal map
+    tkt_to_pos = {o["ticket"]: o.get("position_id") for o in orders if o.get("ticket")}
+    pos_to_out = {}
+    for d in deals:
+        if d.get("entry") == 1 and d.get("position_id"):
+            pos_to_out[d["position_id"]] = d
+
+    groups: Dict[str, List[dict]] = {}
+    for att in local_records:
+        if att.get("action") != "pending_placed":
+            continue
+        ctx = att.get("signal_context") or {}
+        trend = ctx.get("trend") or "unknown"
+        reversal = bool(ctx.get("reversal"))
+        key = f"{trend}/{'reversal' if reversal else 'normal'}"
+        tkt = att.get("ticket")
+        pos = tkt_to_pos.get(tkt) if tkt else None
+        out = pos_to_out.get(pos) if pos else None
+        if out is not None:
+            groups.setdefault(key, []).append(out)
+        else:
+            # No outcome yet — count as placed but not tradeable for stats
+            groups.setdefault(key, [])
+    return {k: _stats_for_deals(ds) for k, ds in sorted(groups.items())}
 
 
 @app.get("/stats")
 async def stats(
     days: int = Query(30, ge=1, le=365),
     pair: Optional[str] = None,
+    include_curve: bool = Query(False),
+    from_ts: Optional[int] = Query(None),
     x_api_secret: str = Header(None),
 ):
     """
     Aggregated stats for retrospective analysis:
-      - by pair: winrate, total profit
+      - by pair: winrate, profit_factor, drawdown, expectancy
+      - by hour/weekday (MSK): temporal slices
       - by order type: market vs pending fill-rate, winrate
       - pending stats: placed / filled / cancelled / expired counts
     """
     require_auth(x_api_secret)
-    from_ts = int((datetime.now(timezone.utc) - timedelta(days=days)).timestamp())
+    if from_ts is None:
+        from_ts = int((datetime.now(timezone.utc) - timedelta(days=days)).timestamp())
     symbol = pair_to_mt5_symbol(pair) if pair else None
 
     deals_r = mt5_bridge.get_history_deals(from_ts, symbol=symbol)
@@ -696,7 +814,9 @@ async def stats(
     orders = orders_r.get("orders", [])
 
     # Overall
-    overall = _stats_for_deals(deals)
+    overall = _stats_for_deals(deals, include_curve=include_curve)
+    by_hour = _stats_by_hour(deals)
+    by_weekday = _stats_by_weekday(deals)
 
     # By pair
     by_pair = {}
@@ -731,10 +851,13 @@ async def stats(
     return {
         "success": True,
         "period_days": days,
+        "from_ts": from_ts,
         "pair": pair,
         "overall": overall,
         "by_pair": by_pair,
         "by_kind": by_kind,
+        "by_hour": by_hour,
+        "by_weekday": by_weekday,
         "pending_lifecycle": {
             "total": total_pending,
             "filled": filled,
@@ -769,7 +892,10 @@ async def analysis(
     local = read_trade_log(days=days, pair=pair)
 
     out_deals = [d for d in deals if d.get("entry") == 1]
-    stats_all = _stats_for_deals(deals)
+    stats_all = _stats_for_deals(deals, include_curve=True)
+    by_hour = _stats_by_hour(deals)
+    by_weekday = _stats_by_weekday(deals)
+    by_signal_context = _stats_by_signal_context(local, orders, deals)
 
     pending_orders = [o for o in orders if o.get("magic") == mt5_bridge.MAGIC_PENDING]
     filled_pending = [o for o in pending_orders if o["state"] in (3, 4)]
@@ -843,6 +969,9 @@ async def analysis(
         "pair": pair,
         "period_days": days,
         "deals_stats": stats_all,
+        "by_hour": by_hour,
+        "by_weekday": by_weekday,
+        "by_signal_context": by_signal_context,
         "pending_breakdown": {
             "total": total_pending,
             "filled": len(filled_pending),

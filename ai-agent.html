@@ -1,0 +1,572 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI-агент стратегии — Forex</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            background: #131722;
+            color: #d1d4dc;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+        }
+        .header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 12px 20px;
+            background: #1e222d;
+            border-bottom: 1px solid #2a2e39;
+        }
+        .header-left { display: flex; align-items: center; gap: 16px; }
+        .header-left h1 { font-size: 18px; font-weight: 700; color: #fff; }
+        .header-left a {
+            color: #2962ff;
+            text-decoration: none;
+            font-size: 13px;
+        }
+        .header-left a:hover { text-decoration: underline; }
+
+        .content {
+            max-width: 980px;
+            margin: 0 auto;
+            padding: 24px 20px;
+            width: 100%;
+        }
+        .section { margin-bottom: 24px; }
+        .section h2 {
+            font-size: 14px;
+            color: #787b86;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin-bottom: 12px;
+        }
+        .card {
+            background: #1e222d;
+            border: 1px solid #2a2e39;
+            border-radius: 8px;
+            padding: 16px;
+            margin-bottom: 12px;
+        }
+        .btn {
+            background: #2a2e39;
+            color: #d1d4dc;
+            border: 1px solid #363a45;
+            padding: 8px 16px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 13px;
+            transition: background 0.2s;
+            white-space: nowrap;
+        }
+        .btn:hover { background: #363a45; }
+        .btn-primary { background: #2962ff; border-color: #2962ff; color: #fff; }
+        .btn-primary:hover { background: #1e4fd6; }
+        .btn-apply { background: #26a69a; border-color: #26a69a; color: #fff; }
+        .btn-apply:hover { background: #1e8e83; }
+        .btn-dismiss { background: #ef5350; border-color: #ef5350; color: #fff; }
+        .btn-dismiss:hover { background: #d33b38; }
+        .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+        .key-input {
+            background: #2a2e39;
+            color: #fff;
+            border: 1px solid #363a45;
+            padding: 8px 12px;
+            border-radius: 4px;
+            font-size: 13px;
+            font-family: monospace;
+            outline: none;
+            width: 100%;
+        }
+        .key-input:focus { border-color: #2962ff; }
+
+        .summary-grid {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 8px;
+            margin-top: 10px;
+        }
+        .stat-tile {
+            background: #2a2e39;
+            border: 1px solid #363a45;
+            border-radius: 6px;
+            padding: 10px 12px;
+        }
+        .stat-tile-label {
+            font-size: 11px;
+            color: #787b86;
+            text-transform: uppercase;
+        }
+        .stat-tile-value {
+            font-size: 18px;
+            color: #fff;
+            font-weight: 700;
+            margin-top: 2px;
+        }
+        .stat-positive { color: #26a69a; }
+        .stat-negative { color: #ef5350; }
+
+        .proposal {
+            background: #1a1e2a;
+            border: 1px solid #2a2e39;
+            border-left-width: 3px;
+            border-radius: 6px;
+            padding: 12px 14px;
+            margin-bottom: 10px;
+        }
+        .proposal.conf-high { border-left-color: #ef5350; }
+        .proposal.conf-medium { border-left-color: #ff9800; }
+        .proposal.conf-low { border-left-color: #787b86; }
+        .proposal-head {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 10px;
+            margin-bottom: 8px;
+            flex-wrap: wrap;
+        }
+        .badge {
+            font-size: 10px;
+            padding: 2px 8px;
+            border-radius: 10px;
+            font-weight: 600;
+            text-transform: uppercase;
+        }
+        .badge-high { background: rgba(239,83,80,0.2); color: #ef5350; }
+        .badge-medium { background: rgba(255,152,0,0.2); color: #ff9800; }
+        .badge-low { background: rgba(120,123,134,0.2); color: #787b86; }
+        .badge-kind { background: rgba(41,98,255,0.2); color: #2962ff; }
+        .badge-status-applied { background: rgba(38,166,154,0.2); color: #26a69a; }
+        .badge-status-dismissed { background: rgba(120,123,134,0.2); color: #787b86; }
+
+        .proposal-title { font-size: 14px; color: #fff; font-weight: 600; flex: 1; }
+        .proposal-rationale { font-size: 13px; color: #d1d4dc; margin: 6px 0; line-height: 1.5; }
+        .proposal-impact { font-size: 12px; color: #787b86; margin: 4px 0; }
+        .proposal-diff {
+            background: #131722;
+            border: 1px solid #2a2e39;
+            border-radius: 4px;
+            padding: 8px 10px;
+            margin: 8px 0;
+            font-family: monospace;
+            font-size: 12px;
+            color: #d1d4dc;
+            white-space: pre-wrap;
+            word-break: break-all;
+        }
+        .proposal-evidence {
+            font-size: 11px;
+            color: #787b86;
+            font-family: monospace;
+            margin-top: 4px;
+        }
+        .proposal-actions {
+            display: flex;
+            gap: 8px;
+            margin-top: 10px;
+        }
+
+        .history-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 12px;
+            font-family: monospace;
+            margin-top: 8px;
+        }
+        .history-table th, .history-table td {
+            text-align: left;
+            padding: 6px 8px;
+            border-bottom: 1px solid #2a2e39;
+        }
+        .history-table th { color: #787b86; font-weight: 600; }
+
+        .ab-row {
+            display: grid;
+            grid-template-columns: 1fr 1fr 1fr;
+            gap: 8px;
+            margin: 8px 0;
+            padding: 8px;
+            background: #1a1e2a;
+            border-radius: 6px;
+            font-size: 12px;
+        }
+        .ab-col-label { color: #787b86; font-size: 11px; text-transform: uppercase; margin-bottom: 4px; }
+        .ab-metric { display: flex; justify-content: space-between; }
+        .ab-metric-name { color: #787b86; }
+        .ab-metric-value { color: #fff; font-weight: 600; }
+
+        .empty {
+            text-align: center;
+            color: #787b86;
+            font-size: 13px;
+            padding: 20px;
+        }
+        .toast {
+            position: fixed;
+            bottom: 20px;
+            right: 20px;
+            background: #1e222d;
+            border: 1px solid #2a2e39;
+            border-radius: 6px;
+            padding: 12px 16px;
+            font-size: 13px;
+            max-width: 360px;
+            box-shadow: 0 4px 16px rgba(0,0,0,0.5);
+        }
+        .toast.ok { border-color: #26a69a; }
+        .toast.err { border-color: #ef5350; }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <div class="header-left">
+            <h1>AI-агент стратегии</h1>
+            <a href="index.html">&larr; График</a>
+            <a href="scanner.html">Сканер</a>
+            <a href="journal.html">Журнал</a>
+            <a href="settings.html">Настройки</a>
+        </div>
+    </div>
+
+    <div class="content">
+        <!-- Admin secret -->
+        <div class="section">
+            <h2>Доступ администратора</h2>
+            <div class="card">
+                <div style="font-size:12px; color:#787b86; margin-bottom:8px;">
+                    Введите <code>SCANNER_ADMIN_SECRET</code>. Сохраняется только локально (localStorage).
+                </div>
+                <div style="display:flex; gap:8px;">
+                    <input type="password" class="key-input" id="adminSecret" placeholder="Admin secret">
+                    <button class="btn btn-primary" onclick="saveSecret()">Сохранить</button>
+                </div>
+                <div id="secretStatus" style="font-size:12px; margin-top:6px; color:#787b86;"></div>
+            </div>
+        </div>
+
+        <!-- Header / trigger -->
+        <div class="section">
+            <h2>Запуск анализа</h2>
+            <div class="card">
+                <div style="display:flex; justify-content:space-between; align-items:center; gap:12px; flex-wrap:wrap;">
+                    <div>
+                        <div style="font-size:13px; color:#d1d4dc;" id="lastRunInfo">Загрузка…</div>
+                        <div style="font-size:11px; color:#787b86; margin-top:4px;">Автозапуск раз в сутки в <code id="cronHour">3</code>:00 МСК. Ручной запуск ограничен 1 раз в 10 минут.</div>
+                    </div>
+                    <button class="btn btn-primary" id="triggerBtn" onclick="triggerAgent()">Запустить агента сейчас</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Active recommendations -->
+        <div class="section">
+            <h2>Активные рекомендации</h2>
+            <div id="proposalsContainer">
+                <div class="empty">Загрузка…</div>
+            </div>
+        </div>
+
+        <!-- History -->
+        <div class="section">
+            <h2>История изменений конфига</h2>
+            <div class="card">
+                <div id="historyContainer">
+                    <div class="empty">Загрузка…</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Past recommendation reports -->
+        <div class="section">
+            <h2>История прогонов агента</h2>
+            <div class="card">
+                <div id="reportsContainer">
+                    <div class="empty">Загрузка…</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div id="toast" style="display:none;" class="toast"></div>
+
+    <script>
+    const LS_KEY = 'pendingConfigAdminSecret';   // same key as settings.html
+
+    function getSecret() { return localStorage.getItem(LS_KEY) || ''; }
+    function setSecret(s) {
+        if (s) localStorage.setItem(LS_KEY, s);
+        else localStorage.removeItem(LS_KEY);
+    }
+
+    function $(id) { return document.getElementById(id); }
+
+    function toast(text, ok = true) {
+        const t = $('toast');
+        t.textContent = text;
+        t.className = 'toast ' + (ok ? 'ok' : 'err');
+        t.style.display = 'block';
+        setTimeout(() => { t.style.display = 'none'; }, 4500);
+    }
+
+    function saveSecret() {
+        const v = $('adminSecret').value.trim();
+        setSecret(v);
+        $('secretStatus').textContent = v ? '✓ Сохранён локально' : 'Очищен';
+        loadAll();
+    }
+
+    async function apiFetch(path, opts = {}) {
+        const secret = getSecret();
+        const headers = { ...(opts.headers || {}) };
+        if (secret) headers['X-Admin-Secret'] = secret;
+        if (opts.body && !(opts.body instanceof FormData)) {
+            headers['Content-Type'] = 'application/json';
+        }
+        const r = await fetch(path, { ...opts, headers });
+        let data = null;
+        try { data = await r.json(); } catch {}
+        return { ok: r.ok, status: r.status, data };
+    }
+
+    function fmtPct(v) {
+        if (typeof v !== 'number') return '—';
+        return (v * 100).toFixed(0) + '%';
+    }
+    function fmtNum(v, digits = 2) {
+        if (typeof v !== 'number') return '—';
+        return v.toFixed(digits);
+    }
+
+    function renderProposal(rec, prop) {
+        const conf = prop.confidence || 'medium';
+        const div = document.createElement('div');
+        div.className = `proposal conf-${conf}`;
+        const diffJson = JSON.stringify(prop.diff, null, 2);
+        const evidenceText = prop.evidence ? JSON.stringify(prop.evidence) : '';
+        div.innerHTML = `
+            <div class="proposal-head">
+                <div class="proposal-title">${escapeHtml(prop.rationale || '(без описания)')}</div>
+                <span class="badge badge-kind">${escapeHtml(prop.kind || 'config_change')}</span>
+                <span class="badge badge-${conf}">${conf.toUpperCase()}</span>
+            </div>
+            ${prop.expected_impact ? `<div class="proposal-impact">Ожидаемый эффект: ${escapeHtml(prop.expected_impact)}</div>` : ''}
+            <div class="proposal-diff">${escapeHtml(diffJson)}</div>
+            ${evidenceText ? `<div class="proposal-evidence">Evidence: ${escapeHtml(evidenceText)}</div>` : ''}
+            <div class="proposal-actions">
+                <button class="btn btn-apply" data-action="apply">Применить</button>
+                <button class="btn btn-dismiss" data-action="dismiss">Отклонить</button>
+            </div>
+        `;
+        div.querySelector('[data-action=apply]').onclick = () => applyProposal(rec.id, prop.id);
+        div.querySelector('[data-action=dismiss]').onclick = () => dismissProposal(rec.id, prop.id);
+        return div;
+    }
+
+    function escapeHtml(s) {
+        if (typeof s !== 'string') s = String(s == null ? '' : s);
+        return s.replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+    }
+
+    async function loadProposals() {
+        const c = $('proposalsContainer');
+        c.innerHTML = '<div class="empty">Загрузка…</div>';
+        const r = await apiFetch('/api/agent/recommendations?status=pending&limit=10');
+        if (!r.ok) {
+            c.innerHTML = `<div class="empty">Ошибка ${r.status}: ${r.data && r.data.error || ''}</div>`;
+            return;
+        }
+        const recs = r.data.recommendations || [];
+        if (recs.length === 0) {
+            c.innerHTML = '<div class="empty">Нет активных рекомендаций. Запустите агента или дождитесь следующего автозапуска.</div>';
+            return;
+        }
+        c.innerHTML = '';
+        // Latest recommendation summary card
+        const latest = recs[0];
+        const summaryCard = document.createElement('div');
+        summaryCard.className = 'card';
+        const o = (latest.stats_snapshot && latest.stats_snapshot.overall) || {};
+        summaryCard.innerHTML = `
+            <div style="font-size:13px; color:#d1d4dc; margin-bottom:6px;">${escapeHtml(latest.summary || '')}</div>
+            <div style="font-size:11px; color:#787b86;">Прогон: ${escapeHtml(latest.generated_at || '')} · ID: ${escapeHtml(latest.id || '')}</div>
+            <div class="summary-grid">
+                <div class="stat-tile"><div class="stat-tile-label">Winrate</div><div class="stat-tile-value">${fmtPct(o.winrate)}</div></div>
+                <div class="stat-tile"><div class="stat-tile-label">Profit factor</div><div class="stat-tile-value">${fmtNum(o.profit_factor)}</div></div>
+                <div class="stat-tile"><div class="stat-tile-label">Max drawdown</div><div class="stat-tile-value stat-negative">${fmtNum(o.max_drawdown)}</div></div>
+                <div class="stat-tile"><div class="stat-tile-label">Trades</div><div class="stat-tile-value">${o.trades || 0}</div></div>
+            </div>
+        `;
+        c.appendChild(summaryCard);
+        // List all pending proposals across all recent recommendations
+        for (const rec of recs) {
+            for (const prop of (rec.proposals || [])) {
+                c.appendChild(renderProposal(rec, prop));
+            }
+        }
+    }
+
+    async function applyProposal(recId, propId) {
+        if (!confirm('Применить это изменение конфига?')) return;
+        const r = await apiFetch('/api/agent/apply', {
+            method: 'POST',
+            body: JSON.stringify({ recommendation_id: recId, proposal_id: propId }),
+        });
+        if (!r.ok) {
+            toast(`Ошибка: ${r.data && r.data.error || r.status}`, false);
+            return;
+        }
+        toast(`Применено. Изменено ключей: ${Object.keys(r.data.diff || {}).length}`);
+        await loadAll();
+    }
+
+    async function dismissProposal(recId, propId) {
+        const reason = prompt('Причина отклонения (необязательно):') || '';
+        const r = await apiFetch('/api/agent/dismiss', {
+            method: 'POST',
+            body: JSON.stringify({ recommendation_id: recId, proposal_id: propId, reason }),
+        });
+        if (!r.ok) {
+            toast(`Ошибка: ${r.data && r.data.error || r.status}`, false);
+            return;
+        }
+        toast('Отклонено');
+        await loadAll();
+    }
+
+    async function loadHistory() {
+        const c = $('historyContainer');
+        const r = await apiFetch('/api/agent/history');
+        if (!r.ok) {
+            c.innerHTML = `<div class="empty">Ошибка ${r.status}</div>`;
+            return;
+        }
+        const { history = [], applied = [] } = r.data;
+        if (history.length === 0) {
+            c.innerHTML = '<div class="empty">История пустая — ни одного применённого изменения.</div>';
+            return;
+        }
+        const rows = history.slice().reverse().slice(0, 20).map(h => {
+            const diffStr = Object.entries(h.diff || {}).map(([k, v]) => `${k}=${JSON.stringify(v)}`).join(', ');
+            return `<tr>
+                <td>${escapeHtml(h.timestamp || '')}</td>
+                <td>${escapeHtml(h.user_email || '—')}</td>
+                <td>${escapeHtml(h.source || '—')}</td>
+                <td>${escapeHtml(diffStr)}</td>
+            </tr>`;
+        }).join('');
+        const abRows = applied.filter(a => a.metrics_after_7d || a.metrics_after_30d).slice(-5).reverse().map(a => {
+            const before = a.metrics_before || {};
+            const after7 = a.metrics_after_7d || {};
+            const after30 = a.metrics_after_30d || {};
+            const diffStr = Object.entries(a.diff || {}).map(([k, v]) => `${k}=${JSON.stringify(v)}`).join(', ');
+            return `
+                <div style="margin-top:12px; border-top:1px solid #2a2e39; padding-top:10px;">
+                    <div style="font-size:12px; color:#d1d4dc;">${escapeHtml(diffStr)} <span style="color:#787b86;">— применено ${escapeHtml(a.applied_at || '')}</span></div>
+                    <div class="ab-row">
+                        <div>
+                            <div class="ab-col-label">До</div>
+                            <div class="ab-metric"><span class="ab-metric-name">winrate</span><span class="ab-metric-value">${fmtPct(before.winrate)}</span></div>
+                            <div class="ab-metric"><span class="ab-metric-name">PF</span><span class="ab-metric-value">${fmtNum(before.profit_factor)}</span></div>
+                        </div>
+                        <div>
+                            <div class="ab-col-label">+7 дн</div>
+                            <div class="ab-metric"><span class="ab-metric-name">winrate</span><span class="ab-metric-value">${fmtPct(after7.winrate)}</span></div>
+                            <div class="ab-metric"><span class="ab-metric-name">PF</span><span class="ab-metric-value">${fmtNum(after7.profit_factor)}</span></div>
+                        </div>
+                        <div>
+                            <div class="ab-col-label">+30 дн</div>
+                            <div class="ab-metric"><span class="ab-metric-name">winrate</span><span class="ab-metric-value">${fmtPct(after30.winrate)}</span></div>
+                            <div class="ab-metric"><span class="ab-metric-name">PF</span><span class="ab-metric-value">${fmtNum(after30.profit_factor)}</span></div>
+                        </div>
+                    </div>
+                </div>`;
+        }).join('');
+
+        c.innerHTML = `
+            <table class="history-table">
+                <thead><tr><th>Время</th><th>Кто</th><th>Источник</th><th>Изменение</th></tr></thead>
+                <tbody>${rows}</tbody>
+            </table>
+            ${abRows ? `<div style="margin-top:14px; font-size:13px; color:#787b86;">A/B по применённым изменениям:</div>${abRows}` : ''}
+        `;
+    }
+
+    async function loadReports() {
+        const c = $('reportsContainer');
+        const r = await apiFetch('/api/agent/recommendations?limit=10');
+        if (!r.ok) {
+            c.innerHTML = `<div class="empty">Ошибка ${r.status}</div>`;
+            return;
+        }
+        const recs = r.data.recommendations || [];
+        if (recs.length === 0) {
+            c.innerHTML = '<div class="empty">Прогонов ещё не было.</div>';
+            $('lastRunInfo').textContent = 'Агент ни разу не запускался.';
+            return;
+        }
+        $('lastRunInfo').textContent = `Последний прогон: ${recs[0].generated_at} · предложений: ${(recs[0].proposals || []).length}`;
+        const rows = recs.map(r => {
+            const counts = (r.proposals || []).reduce((acc, p) => {
+                acc[p.status] = (acc[p.status] || 0) + 1;
+                return acc;
+            }, {});
+            const parts = Object.entries(counts).map(([k, v]) => `${k}:${v}`).join(' / ');
+            return `<tr>
+                <td>${escapeHtml(r.generated_at)}</td>
+                <td>${escapeHtml(r.id)}</td>
+                <td>${(r.proposals || []).length}</td>
+                <td>${escapeHtml(parts)}</td>
+                <td>${escapeHtml((r.summary || '').slice(0, 80))}</td>
+            </tr>`;
+        }).join('');
+        c.innerHTML = `
+            <table class="history-table">
+                <thead><tr><th>Дата</th><th>ID</th><th>Предложений</th><th>Статусы</th><th>Сводка</th></tr></thead>
+                <tbody>${rows}</tbody>
+            </table>
+        `;
+    }
+
+    async function triggerAgent() {
+        const btn = $('triggerBtn');
+        btn.disabled = true;
+        btn.textContent = 'Анализирую…';
+        try {
+            const r = await apiFetch('/api/agent/trigger', { method: 'POST' });
+            if (!r.ok) {
+                toast(`Ошибка: ${r.data && r.data.error || r.status}`, false);
+                return;
+            }
+            toast(`Готово: ${r.data.proposals} предложений`);
+            await loadAll();
+        } finally {
+            btn.disabled = false;
+            btn.textContent = 'Запустить агента сейчас';
+        }
+    }
+
+    async function loadAll() {
+        if (!getSecret()) {
+            $('secretStatus').textContent = 'Введите admin secret чтобы загрузить данные';
+            return;
+        }
+        await Promise.all([loadProposals(), loadHistory(), loadReports()]);
+    }
+
+    // Init
+    (function init() {
+        const s = getSecret();
+        if (s) {
+            $('adminSecret').value = s;
+            $('secretStatus').textContent = '✓ Загружен из localStorage';
+        }
+        loadAll();
+    })();
+    </script>
+</body>
+</html>

@@ -46,6 +46,10 @@ services:
       # Anthropic Claude (чат-ассистент на странице стратегии)
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
       - CLAUDE_MODEL=${CLAUDE_MODEL:-claude-sonnet-4-6}
+      # AI-агент-оптимизатор: ежедневный анализ торговой истории → рекомендации
+      - AI_AGENT_ENABLED=${AI_AGENT_ENABLED:-false}
+      - AI_AGENT_CRON_MSK_HOUR=${AI_AGENT_CRON_MSK_HOUR:-3}
+      - AI_AGENT_DATA_ROOT=/data/ai-logs
       # JSON-файл live-конфига отложенных ордеров
       - PENDING_CONFIG_FILE=/data/pending_config.json
       # Auth (login/register/reset)
