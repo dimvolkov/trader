@@ -263,6 +263,29 @@
         .pair-tooltip .tt-ok { color: #00e676; }
         .pair-tooltip .tt-wait { color: #787b86; }
         .pair-tooltip .tt-warn { color: #ef5350; font-weight: 600; }
+        .pair-tooltip { max-width: 460px; }
+        .pair-tooltip .tt-check {
+            display: flex; align-items: flex-start; gap: 6px;
+            margin: 3px 0; font-size: 11.5px; line-height: 1.4;
+        }
+        .pair-tooltip .tt-check .mark {
+            width: 14px; flex: 0 0 14px; font-weight: 700;
+            text-align: center;
+        }
+        .pair-tooltip .tt-check .mark.ok { color: #00e676; }
+        .pair-tooltip .tt-check .mark.no { color: #ef5350; }
+        .pair-tooltip .tt-check .mark.skip { color: #4a4d57; }
+        .pair-tooltip .tt-check .txt { flex: 1; color: #d1d4dc; }
+        .pair-tooltip .tt-check .txt b { color: #fff; }
+        .pair-tooltip .tt-narrative {
+            margin-top: 6px; padding: 8px 10px;
+            background: #131722; border-left: 3px solid #2962ff;
+            border-radius: 4px; font-size: 11.5px;
+            line-height: 1.55; color: #d1d4dc;
+        }
+        .pair-tooltip .tt-narrative.ok { border-left-color: #00e676; }
+        .pair-tooltip .tt-narrative.no { border-left-color: #787b86; }
+        .pair-tooltip .tt-narrative b { color: #fff; }
         .chart-btn {
             background: transparent;
             border: none;
@@ -2292,6 +2315,186 @@
         const tooltip = document.getElementById('pairTooltip');
         let tooltipVisible = false;
 
+        // Format price for narrative text
+        function fpPrice(v) {
+            if (v == null || !isFinite(v)) return '—';
+            return v >= 10 ? v.toFixed(2) : v.toFixed(5);
+        }
+
+        // Build detailed decision explanation: checklist + narrative verdict
+        function buildDecisionExplanation(r) {
+            const fp = fpPrice;
+            const checklist = [];
+            const trendIsValid = r.trend === 'up' || r.trend === 'down';
+            const dirRu = r.trend === 'up' ? 'восходящий ↑' : r.trend === 'down' ? 'нисходящий ↓' : '—';
+            const dirShort = r.trend === 'up' ? 'LONG' : r.trend === 'down' ? 'SHORT' : '—';
+
+            // 1. Trend H1
+            if (trendIsValid) {
+                const hi = (r.swingHighs || []).map(fp).join('→');
+                const lo = (r.swingLows || []).map(fp).join('→');
+                checklist.push({
+                    mark: 'ok',
+                    text: `Тренд H1: <b>${dirRu}</b>` + (hi ? ` (хаи ${hi}, лоу ${lo})` : '')
+                });
+            } else {
+                const hi = (r.swingHighs || []).map(fp).join('→');
+                const lo = (r.swingLows || []).map(fp).join('→');
+                checklist.push({
+                    mark: 'no',
+                    text: `Тренд H1 не определён — <b>боковик</b>` + (hi ? ` (хаи ${hi}, лоу ${lo})` : '')
+                });
+            }
+
+            // 2. Trend continues (not reversing)
+            if (!trendIsValid) {
+                checklist.push({ mark: 'skip', text: 'Проверка разворота — нет тренда' });
+            } else if (r.reversal) {
+                const c = r.lastCorrSize != null ? fp(r.lastCorrSize) : '?';
+                const i = r.lastImpSize != null ? fp(r.lastImpSize) : '?';
+                checklist.push({
+                    mark: 'no',
+                    text: `<b>Сигнал разворота</b>: коррекция ${c} > импульс ${i}`
+                });
+            } else {
+                const c = r.lastCorrSize != null ? fp(r.lastCorrSize) : '?';
+                const i = r.lastImpSize != null ? fp(r.lastImpSize) : '?';
+                checklist.push({
+                    mark: 'ok',
+                    text: `Тренд продолжается (импульс ${i} ≥ коррекция ${c})`
+                });
+            }
+
+            // 3. Phase = correction near H1 level
+            if (!trendIsValid) {
+                checklist.push({ mark: 'skip', text: 'Фаза — нет тренда' });
+            } else if (r.phase === 'Коррекция' && r.lastCorr) {
+                checklist.push({
+                    mark: 'ok',
+                    text: `Фаза — <b>коррекция</b> (${fp(r.lastCorr.startPrice)} → ${fp(r.lastCorr.endPrice)})`
+                });
+            } else if (r.phase === 'Импульс' && r.lastImp) {
+                checklist.push({
+                    mark: 'no',
+                    text: `Фаза — <b>импульс</b> (${fp(r.lastImp.startPrice)} → ${fp(r.lastImp.endPrice)}), ждать коррекции`
+                });
+            } else {
+                checklist.push({ mark: 'no', text: 'Фаза не определена' });
+            }
+
+            // 4. H1 levels constructed
+            const hasLevels = r.levels && r.levels.impulseEnd != null && r.levels.target != null;
+            if (!trendIsValid) {
+                checklist.push({ mark: 'skip', text: 'Уровни H1 — нет тренда' });
+            } else if (hasLevels) {
+                checklist.push({
+                    mark: 'ok',
+                    text: `Уровни H1: ${fp(r.levels.impulseEnd)} / цель ${fp(r.levels.target)}`
+                });
+            } else {
+                checklist.push({ mark: 'no', text: 'Цель слева на H1 не построена' });
+            }
+
+            // 5-7. SLOM signals on M30
+            const slomApplicable = trendIsValid && hasLevels;
+            const s1 = r.slom && r.slom.signal1;
+            const s2 = r.slom && r.slom.signal2;
+            const s3 = r.slom && r.slom.signal3;
+
+            if (!slomApplicable) {
+                checklist.push({ mark: 'skip', text: 'Сигнал 1 Слома (M30) — нет базы для проверки' });
+                checklist.push({ mark: 'skip', text: 'Сигнал 2 Слома (M30) — нет базы для проверки' });
+                checklist.push({ mark: 'skip', text: 'Сигнал 3 Слома (M30) — нет базы для проверки' });
+            } else {
+                checklist.push(s1
+                    ? { mark: 'ok', text: `Сигнал 1: пробой микро-уровня <b>${fp(s1.price)}</b>` }
+                    : { mark: 'no', text: 'Сигнал 1: пробой микро-уровня на M30 не обнаружен' });
+                checklist.push(s2
+                    ? { mark: 'ok', text: `Сигнал 2: откат к <b>${fp(s2.price)}</b>` }
+                    : { mark: s1 ? 'no' : 'skip', text: s1 ? 'Сигнал 2: откат к пробитому уровню не оформлен' : 'Сигнал 2: ждать Сигнала 1' });
+                checklist.push(s3
+                    ? { mark: 'ok', text: `Сигнал 3: новый импульс пробил <b>${fp(s3.price)}</b>` }
+                    : { mark: s2 ? 'no' : 'skip', text: s2 ? 'Сигнал 3: подтверждающий импульс не пробил микро-максимум' : 'Сигнал 3: ждать Сигнала 2' });
+            }
+
+            // 8. R:R >= 3.0
+            if (!r.entry) {
+                checklist.push({ mark: 'skip', text: 'R:R — вход не рассчитан' });
+            } else if (r.entry.valid) {
+                checklist.push({ mark: 'ok', text: `R:R = <b>1:${r.entry.rr.toFixed(1)}</b> ≥ 3.0` });
+            } else {
+                checklist.push({ mark: 'no', text: `R:R = <b>1:${r.entry.rr.toFixed(1)}</b> < 3.0` });
+            }
+
+            // ─── Narrative verdict ───
+            let verdict;
+            if (!trendIsValid) {
+                const hi = (r.swingHighs || []).map(fp).join('→') || 'нет данных';
+                const lo = (r.swingLows || []).map(fp).join('→') || 'нет данных';
+                verdict = {
+                    kind: 'no',
+                    text: `Боковое движение на H1 (хаи ${hi}, лоу ${lo}). По стратегии трендовые входы во флэте запрещены — <b>пропускаем</b>.`
+                };
+            } else if (r.reversal) {
+                const c = r.lastCorrSize != null ? fp(r.lastCorrSize) : '?';
+                const i = r.lastImpSize != null ? fp(r.lastImpSize) : '?';
+                verdict = {
+                    kind: 'no',
+                    text: `Тренд <b>${dirRu}</b> обнаружен, но последняя коррекция (${c}) больше последнего импульса (${i}) — это сигнал разворота. Прекращаем торговлю в этом направлении, ждём формирования нового тренда.`
+                };
+            } else if (r.phase !== 'Коррекция') {
+                const imp = r.lastImp ? `${fp(r.lastImp.startPrice)} → ${fp(r.lastImp.endPrice)}` : '';
+                verdict = {
+                    kind: 'no',
+                    text: `Тренд <b>${dirRu}</b> подтверждён, но сейчас рынок в фазе <b>импульса</b>${imp ? ' (' + imp + ')' : ''}. Заходить нужно только на коррекции к уровню H1 — ждём отката.`
+                };
+            } else if (!hasLevels) {
+                verdict = {
+                    kind: 'no',
+                    text: `Тренд <b>${dirRu}</b> есть, идёт коррекция, но цель слева на H1 не построена — нечего использовать как тейк-профит. <b>Пропускаем</b>.`
+                };
+            } else if (!s1) {
+                verdict = {
+                    kind: 'no',
+                    text: `Тренд <b>${dirRu}</b>, коррекция дошла до уровня ${fp(r.levels.impulseEnd)}, но на M30 ещё нет пробоя микро-уровня в сторону тренда. Ждём паттерн <b>Слом</b> (3 сигнала).`
+                };
+            } else if (!s2) {
+                verdict = {
+                    kind: 'no',
+                    text: `Пробой микро-уровня <b>${fp(s1.price)}</b> на M30 произошёл, но откат к нему ещё не оформился. Ждём <b>Сигнал 2</b> (касание/недобой пробитого уровня).`
+                };
+            } else if (!s3) {
+                verdict = {
+                    kind: 'no',
+                    text: `Слом почти готов: пробой ${fp(s1.price)}, откат до ${fp(s2.price)}. Ждём <b>Сигнал 3</b> — новый импульс должен пробить микро-${r.trend === 'up' ? 'максимум' : 'минимум'} в сторону тренда.`
+                };
+            } else if (r.entry && !r.entry.valid) {
+                const e = r.entry;
+                verdict = {
+                    kind: 'no',
+                    text: `Все 3 сигнала Слома сформированы, но R:R = <b>1:${e.rr.toFixed(1)}</b> < 3.0 (вход ${fp(e.entry)}, стоп ${fp(e.stop)}, цель ${fp(e.take)}). По правилам пропускаем — <b>невыгодное соотношение</b>.`
+                };
+            } else if (r.entry && r.entry.valid) {
+                const e = r.entry;
+                const hi = (r.swingHighs || []).map(fp).join('→');
+                verdict = {
+                    kind: 'ok',
+                    text: `Тренд <b>${dirRu}</b> H1 подтверждён${hi ? ' (хаи ' + hi + ')' : ''}. Коррекция дошла до уровня ${fp(r.levels.impulseEnd)}. На M30 сформирован Слом: пробой ${fp(s1.price)}, откат ${fp(s2.price)}, подтверждение ${fp(s3.price)}. Вход <b>${fp(e.entry)}</b>, стоп за слом <b>${fp(e.stop)}</b>, цель <b>${fp(e.take)}</b>. R:R = <b>1:${e.rr.toFixed(1)}</b> — <b>открываем ${dirShort}</b>.`
+                };
+            } else {
+                verdict = {
+                    kind: 'no',
+                    text: 'Недостаточно данных для финального вердикта.'
+                };
+            }
+
+            return { checklist, verdict };
+        }
+
+        function markChar(m) {
+            return m === 'ok' ? '✓' : m === 'no' ? '✗' : '—';
+        }
+
         function buildTooltipHtml(pair, r) {
             const fp = (v) => v == null ? '—' : (v >= 10 ? v.toFixed(2) : v.toFixed(5));
             const trendLabel = r.trend === 'up' ? 'ВОСХОДЯЩИЙ ↑' : r.trend === 'down' ? 'НИСХОДЯЩИЙ ↓' : 'БОКОВИК ↔';
@@ -2369,6 +2572,15 @@
                 html += `<div class="tt-row"><span class="tt-label">Тейк:</span> <span class="up">${fp(r.entry.take)}</span></div>`;
                 html += `<div class="tt-row"><span class="tt-label">R:R:</span> <span class="${r.entry.valid ? 'tt-ok' : 'tt-wait'}">1:${r.entry.rr.toFixed(1)}</span></div>`;
             }
+
+            // Step 7: Checklist + decision narrative
+            const dec = buildDecisionExplanation(r);
+            html += `<h4>Чек-лист (8 правил)</h4>`;
+            for (const item of dec.checklist) {
+                html += `<div class="tt-check"><span class="mark ${item.mark}">${markChar(item.mark)}</span><span class="txt">${item.text}</span></div>`;
+            }
+            html += `<h4>Решение</h4>`;
+            html += `<div class="tt-narrative ${dec.verdict.kind}">${dec.verdict.text}</div>`;
 
             return html;
         }
