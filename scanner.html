@@ -569,7 +569,7 @@
                     <th>R:R</th>
                     <th>Размер позиции</th>
                     <th>Риск / Прибыль</th>
-                    <th>Время</th>
+                    <th>Время (МСК)</th>
                     <th></th>
                 </tr>
             </thead>
@@ -1400,7 +1400,7 @@
                 <td>${rrHtml}</td>
                 <td>${sizeHtml}</td>
                 <td>${riskProfitHtml}</td>
-                <td class="neutral scan-time" onclick="event.stopPropagation(); toggleHistory('${pair}')" title="Показать историю">${result.scanTime ? new Date(result.scanTime).toLocaleDateString('ru-RU', {day:'2-digit',month:'2-digit'}) + ' ' + new Date(result.scanTime).toLocaleTimeString() : '—'}</td>
+                <td class="neutral scan-time" onclick="event.stopPropagation(); toggleHistory('${pair}')" title="Показать историю">${result.scanTime ? new Date(result.scanTime).toLocaleDateString('ru-RU', {day:'2-digit',month:'2-digit',timeZone:'Europe/Moscow'}) + ' ' + new Date(result.scanTime).toLocaleTimeString('ru-RU', {timeZone:'Europe/Moscow'}) : '—'}</td>
                 <td><button class="chart-btn" onclick="event.stopPropagation(); openChart('${pair}', ${hasValid})" title="Открыть график">📈</button></td>
             </tr>`;
 
@@ -1802,14 +1802,14 @@
                 return `<tr class="history-row hidden" id="${id}"><td colspan="12"><span class="neutral">Нет истории</span></td></tr>`;
             }
             const last10 = entries.slice(-10).reverse();
-            let tableHtml = `<table class="history-table"><thead><tr><th>Время</th><th>Тренд</th><th>Вердикт</th><th>R:R</th></tr></thead><tbody>`;
+            let tableHtml = `<table class="history-table"><thead><tr><th>Время (МСК)</th><th>Тренд</th><th>Вердикт</th><th>R:R</th></tr></thead><tbody>`;
             for (const h of last10) {
                 const trendIcon = h.trend === 'up' ? '↑' : h.trend === 'down' ? '↓' : '↔';
                 const trendClass = h.trend === 'up' ? 'up' : h.trend === 'down' ? 'down' : 'neutral';
                 const verdict = h.valid ? '<span class="verdict-ok">Вход</span>' : `<span class="neutral">${h.verdict || 'Нет входа'}</span>`;
                 const rr = h.rr ? `1:${h.rr.toFixed(1)}` : '—';
                 const rowClass = h.valid ? ' class="history-valid"' : '';
-                const time = new Date(h.time).toLocaleDateString('ru-RU', {day:'2-digit',month:'2-digit'}) + ' ' + new Date(h.time).toLocaleTimeString();
+                const time = new Date(h.time).toLocaleDateString('ru-RU', {day:'2-digit',month:'2-digit',timeZone:'Europe/Moscow'}) + ' ' + new Date(h.time).toLocaleTimeString('ru-RU', {timeZone:'Europe/Moscow'});
                 tableHtml += `<tr${rowClass}><td>${time}</td><td><span class="${trendClass}">${trendIcon}</span></td><td>${verdict}</td><td>${rr}</td></tr>`;
             }
             tableHtml += `</tbody></table>`;
@@ -1842,7 +1842,7 @@
         function addScanLog(pair, message, type) {
             // type: 'info', 'success', 'warn', 'error', 'tg'
             const now = new Date();
-            const time = now.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+            const time = now.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit', second: '2-digit', timeZone: 'Europe/Moscow' });
             const entry = document.createElement('div');
             entry.className = `scan-log-entry log-${type || 'info'}`;
             entry.innerHTML = `<span class="log-time">${time}</span><span class="log-pair">${pair || '—'}</span><span class="log-msg">${message}</span>`;
@@ -2141,7 +2141,7 @@
             saveChartDataCache();
 
             const elapsed = ((Date.now() - cycleStart) / 1000).toFixed(0);
-            const finishTime = new Date().toLocaleTimeString();
+            const finishTime = new Date().toLocaleTimeString('ru-RU', { timeZone: 'Europe/Moscow' });
             addScanLog('', `Сканирование завершено за ${elapsed}с`, 'info');
             statusText.textContent = `Анализ завершён в ${finishTime} (${elapsed}с)`;
             cycleInfo.textContent = '';
