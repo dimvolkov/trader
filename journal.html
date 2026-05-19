@@ -166,6 +166,81 @@
             padding: 40px 20px;
             font-size: 13px;
         }
+
+        /* Hover-tooltip with order outcome explanation */
+        .order-tooltip {
+            position: fixed;
+            background: #1e222d;
+            border: 1px solid #363a45;
+            border-radius: 8px;
+            padding: 14px 18px;
+            font-size: 12px;
+            color: #d1d4dc;
+            z-index: 9999;
+            pointer-events: none;
+            box-shadow: 0 8px 24px rgba(0,0,0,0.5);
+            line-height: 1.6;
+        }
+        .order-tooltip h4 {
+            color: #787b86;
+            font-size: 11px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin: 8px 0 4px;
+            border-bottom: 1px solid #2a2e39;
+            padding-bottom: 3px;
+        }
+        .order-tooltip h4:first-child { margin-top: 0; }
+        .order-tooltip .tt-title {
+            font-size: 14px;
+            font-weight: 700;
+            color: #fff;
+            margin-bottom: 6px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            flex-wrap: wrap;
+        }
+        .order-tooltip .tt-body {
+            display: flex;
+            gap: 18px;
+            align-items: flex-start;
+        }
+        .order-tooltip .tt-col-left  { flex: 0 0 360px; min-width: 0; }
+        .order-tooltip .tt-col-right { flex: 0 0 340px; min-width: 0; }
+        .order-tooltip .tt-col-right h4:first-child { margin-top: 0; }
+        .order-tooltip .tt-row {
+            display: flex;
+            justify-content: space-between;
+            gap: 12px;
+            font-size: 11.5px;
+        }
+        .order-tooltip .tt-label { color: #787b86; }
+        .order-tooltip .tt-val { color: #fff; font-weight: 600; }
+        .order-tooltip .tt-check {
+            display: flex; align-items: flex-start; gap: 6px;
+            margin: 3px 0; font-size: 11.5px; line-height: 1.4;
+        }
+        .order-tooltip .tt-check .mark {
+            width: 14px; flex: 0 0 14px; font-weight: 700;
+            text-align: center;
+        }
+        .order-tooltip .tt-check .mark.ok { color: #00e676; }
+        .order-tooltip .tt-check .mark.no { color: #ef5350; }
+        .order-tooltip .tt-check .mark.skip { color: #4a4d57; }
+        .order-tooltip .tt-check .txt { flex: 1; color: #d1d4dc; }
+        .order-tooltip .tt-check .txt b { color: #fff; }
+        .order-tooltip .tt-narrative {
+            margin-top: 6px; padding: 8px 10px;
+            background: #131722; border-left: 3px solid #2962ff;
+            border-radius: 4px; font-size: 11.5px;
+            line-height: 1.55; color: #d1d4dc;
+        }
+        .order-tooltip .tt-narrative.ok   { border-left-color: #00e676; }
+        .order-tooltip .tt-narrative.no   { border-left-color: #ef5350; }
+        .order-tooltip .tt-narrative.warn { border-left-color: #ff9800; }
+        .order-tooltip .tt-narrative.neutral { border-left-color: #787b86; }
+        .order-tooltip .tt-narrative b { color: #fff; }
     </style>
 </head>
 <body>
@@ -246,8 +321,11 @@
         </div>
     </div>
 
+    <div class="order-tooltip" id="orderTooltip" style="display:none;"></div>
+
     <script>
     let lastRows = [];
+    let displayedRows = [];
 
     function adminSecret() {
         return localStorage.getItem('scannerAdminSecret') || '';
@@ -289,6 +367,313 @@
         return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":"&#39;"}[c]));
     }
 
+    // ─── Order tooltip helpers ───
+    function fpPrice(v) {
+        if (v == null || !isFinite(v)) return '—';
+        return v >= 10 ? v.toFixed(2) : v.toFixed(5);
+    }
+    function fmtMoney(v) {
+        if (v == null || !isFinite(v)) return '—';
+        const sign = v > 0 ? '+' : '';
+        return sign + v.toFixed(2);
+    }
+    function markChar(m) {
+        return m === 'ok' ? '✓' : m === 'no' ? '✗' : '—';
+    }
+    // Returns hours between two times where each may be ISO string or unix-seconds.
+    function hoursBetween(start, end) {
+        const toMs = (t) => {
+            if (t == null) return null;
+            if (typeof t === 'number') return t * 1000;
+            const d = new Date(t);
+            return isNaN(d.getTime()) ? null : d.getTime();
+        };
+        const a = toMs(start), b = toMs(end);
+        if (a == null || b == null) return null;
+        return (b - a) / 3600000;
+    }
+    function fmtHours(h) {
+        if (h == null) return '—';
+        if (h < 1) return Math.round(h * 60) + ' мин';
+        if (h < 48) return h.toFixed(1) + ' ч';
+        return (h / 24).toFixed(1) + ' дн';
+    }
+    function fmtTimeFlex(t) {
+        if (t == null) return '—';
+        if (typeof t === 'number') return fmtTime(new Date(t * 1000).toISOString());
+        return fmtTime(t);
+    }
+    function dirLabel(d) {
+        if (!d) return '—';
+        const x = String(d).toLowerCase();
+        if (x === 'buy' || x === 'up') return 'LONG ↑';
+        if (x === 'sell' || x === 'down') return 'SHORT ↓';
+        return d.toUpperCase();
+    }
+
+    function inferOutcome(o) {
+        const s = o.status;
+        if (s === 'failed' || s === 'rejected') return 'failed';
+        if (s === 'placed') return 'pending';
+        if (s === 'cancelled') return 'cancelled';
+        if (s === 'expired') return 'expired';
+        if (s === 'filled') return 'active';
+        if (s === 'closed') {
+            if (o.close_price == null) return 'closed_unknown';
+            const ref = Math.abs(o.entry || o.close_price);
+            const tol = ref * 0.001;
+            const p = o.profit;
+            if (o.stop != null && Math.abs(o.close_price - o.stop) <= tol && (p == null || p <= 0)) return 'sl_hit';
+            if (o.take != null && Math.abs(o.close_price - o.take) <= tol && (p == null || p > 0)) return 'tp_hit';
+            return 'manual_close';
+        }
+        return 'unknown';
+    }
+
+    function buildOrderContextItems(o) {
+        const ctx = o.signal_context || {};
+        const items = [];
+        // Trend
+        if (ctx.trend) {
+            const t = String(ctx.trend).toLowerCase();
+            const label = t === 'up' ? 'восходящий ↑' : t === 'down' ? 'нисходящий ↓' : t === 'range' ? 'боковик ↔' : ctx.trend;
+            items.push(`<div class="tt-row"><span class="tt-label">Тренд:</span><span class="tt-val">${escapeHtml(label)}</span></div>`);
+        }
+        if (ctx.phase) {
+            items.push(`<div class="tt-row"><span class="tt-label">Фаза:</span><span class="tt-val">${escapeHtml(ctx.phase)}</span></div>`);
+        }
+        // Source / kind
+        let source = ctx.source;
+        if (!source) {
+            if (ctx.manual === true || ctx.manual === 'true') source = 'manual';
+            else if (o.source === 'mt5_only') source = 'external';
+            else if (o.signal_context) source = 'auto-scanner';
+            else source = '—';
+        }
+        items.push(`<div class="tt-row"><span class="tt-label">Источник:</span><span class="tt-val">${escapeHtml(source)}</span></div>`);
+
+        if (ctx.note) {
+            items.push(`<div class="tt-row"><span class="tt-label">Заметка:</span><span class="tt-val" style="text-align:right;white-space:normal">${escapeHtml(ctx.note)}</span></div>`);
+        }
+
+        // Order summary line
+        const dir = dirLabel(o.direction);
+        const summary = [
+            `<b>${dir}</b>`,
+            `Entry ${fpPrice(o.entry)}`,
+            `SL ${fpPrice(o.stop)}`,
+            `TP ${fpPrice(o.take)}`,
+        ];
+        if (o.rr != null) summary.push(`R:R 1:${o.rr.toFixed(2)}`);
+        if (o.volume != null) summary.push(`vol ${Number(o.volume).toFixed(2)}`);
+        items.push(`<div style="margin-top:6px;font-size:11.5px;color:#d1d4dc">${summary.join(' · ')}</div>`);
+
+        return items.join('');
+    }
+
+    function buildOrderOutcomeItems(o) {
+        const outcome = inferOutcome(o);
+        const status = o.status;
+        const list = [];
+
+        // 1. Placed?
+        if (status === 'failed' || status === 'rejected') {
+            list.push({ mark: 'no', text: `Ордер <b>не размещён</b> (${escapeHtml(status)})` });
+        } else {
+            list.push({ mark: 'ok', text: `Ордер размещён в MT5 (${escapeHtml(o.kind || '—')})` });
+        }
+
+        // 2. Filled?
+        const filled = o.fill_price != null;
+        if (filled) {
+            list.push({ mark: 'ok', text: `Сработал по цене <b>${fpPrice(o.fill_price)}</b>` });
+        } else if (status === 'placed') {
+            list.push({ mark: 'skip', text: 'Ждёт исполнения' });
+        } else if (status === 'cancelled' || status === 'expired') {
+            list.push({ mark: 'no', text: `Не сработал — ${status === 'expired' ? 'истёк TTL' : 'отменён'}` });
+        } else if (status === 'failed' || status === 'rejected') {
+            list.push({ mark: 'skip', text: '— (ордер не дошёл до рынка)' });
+        } else {
+            list.push({ mark: 'skip', text: 'Статус исполнения неизвестен' });
+        }
+
+        // 3. Closed?
+        if (status === 'closed') {
+            list.push({ mark: 'ok', text: `Позиция закрыта (${fpPrice(o.close_price)})` });
+        } else if (status === 'filled') {
+            list.push({ mark: 'skip', text: 'Ещё в рынке (открытая позиция)' });
+        } else {
+            list.push({ mark: 'skip', text: '— (позиция не открывалась)' });
+        }
+
+        // 4. Close reason
+        if (outcome === 'tp_hit') {
+            list.push({ mark: 'ok', text: `Закрытие по <b>тейку</b> (${fpPrice(o.take)})` });
+        } else if (outcome === 'sl_hit') {
+            list.push({ mark: 'no', text: `Закрытие по <b>стопу</b> (${fpPrice(o.stop)})` });
+        } else if (outcome === 'manual_close') {
+            list.push({ mark: 'no', text: `Закрытие <b>вручную</b> до тейка/стопа` });
+        } else if (outcome === 'cancelled') {
+            const r = o.reason || '';
+            if (/watcher|age/i.test(r)) list.push({ mark: 'no', text: `Pending отменён watcher'ом: ${escapeHtml(r)}` });
+            else if (/bid|sl|stop/i.test(r)) list.push({ mark: 'no', text: `Pending отменён (пробой стопа до открытия): ${escapeHtml(r)}` });
+            else list.push({ mark: 'no', text: `Отменён: ${escapeHtml(r || 'без причины')}` });
+        } else if (outcome === 'expired') {
+            list.push({ mark: 'no', text: 'Истёк TTL — цена не дошла до уровня' });
+        } else if (outcome === 'failed') {
+            list.push({ mark: 'no', text: `Сбой размещения: ${escapeHtml(o.reason || '—')}` });
+        } else {
+            list.push({ mark: 'skip', text: 'Причина закрытия — позиция ещё активна' });
+        }
+
+        // 5. Financial result
+        if (o.profit == null) {
+            list.push({ mark: 'skip', text: 'Финансовый результат не зафиксирован' });
+        } else if (o.profit > 0) {
+            list.push({ mark: 'ok', text: `Прибыль: <b>${fmtMoney(o.profit)}</b>` });
+        } else if (o.profit < 0) {
+            list.push({ mark: 'no', text: `Убыток: <b>${fmtMoney(o.profit)}</b>` });
+        } else {
+            list.push({ mark: 'skip', text: 'Результат: 0 (безубыток)' });
+        }
+
+        return list;
+    }
+
+    function buildOrderVerdict(o) {
+        const outcome = inferOutcome(o);
+        const pair = escapeHtml(o.pair || '');
+        const dir = dirLabel(o.direction);
+        const reason = o.reason ? escapeHtml(o.reason) : '';
+
+        const heldH = hoursBetween(o.fill_time || o.timestamp, o.close_time);
+        const placedAgoH = hoursBetween(o.timestamp, new Date().toISOString());
+
+        switch (outcome) {
+            case 'failed':
+                return {
+                    kind: 'no',
+                    text: `Ордер по <b>${pair}</b> <b>не был размещён</b>: ${reason || 'нет описания'}. Никаких действий по нему в рынке не было.`
+                };
+            case 'pending':
+                return {
+                    kind: 'neutral',
+                    text: `Pending-ордер <b>${dir}</b> по <b>${pair}</b> выставлен ${fmtHours(placedAgoH)} назад по цене ${fpPrice(o.entry)}, стоп ${fpPrice(o.stop)}, цель ${fpPrice(o.take)}. <b>Ждёт исполнения</b>.`
+                };
+            case 'cancelled': {
+                let why;
+                if (/watcher|age/i.test(reason)) why = 'watcher отменил pending по возрасту — цена не дошла до уровня входа за отведённое время';
+                else if (/bid|sl|stop/i.test(reason)) why = 'цена пробила уровень стопа ещё до исполнения — watcher закрыл pending, чтобы не входить в уже отменённый сценарий';
+                else why = `причина: ${reason || 'не указана'}`;
+                return {
+                    kind: 'neutral',
+                    text: `Pending <b>${dir}</b> по <b>${pair}</b> был выставлен и <b>отменён</b>: ${why}. Реальной позиции не было, P&L = 0.`
+                };
+            }
+            case 'expired':
+                return {
+                    kind: 'neutral',
+                    text: `Pending <b>${dir}</b> по <b>${pair}</b> <b>истёк по TTL</b> через ${fmtHours(placedAgoH)} после выставления. Цена так и не дошла до уровня входа ${fpPrice(o.entry)} — сценарий не реализовался.`
+                };
+            case 'active':
+                return {
+                    kind: 'warn',
+                    text: `Ордер <b>${dir}</b> по <b>${pair}</b> <b>сработал</b> по цене ${fpPrice(o.fill_price)} (${fmtTimeFlex(o.fill_time)}). Позиция <b>в рынке</b>, стоп ${fpPrice(o.stop)}, цель ${fpPrice(o.take)}. Время в позиции: ${fmtHours(hoursBetween(o.fill_time || o.timestamp, new Date().toISOString()))}.`
+                };
+            case 'tp_hit':
+                return {
+                    kind: 'ok',
+                    text: `Ордер <b>${dir}</b> по <b>${pair}</b> сработал по ${fpPrice(o.fill_price)}, цена дошла до <b>тейка</b> ${fpPrice(o.take)} и закрылась по ${fpPrice(o.close_price)}. <b>Результат: ${fmtMoney(o.profit)}</b>${o.rr != null ? ` (R:R 1:${o.rr.toFixed(2)} отработал полностью)` : ''}. Время в сделке: ${fmtHours(heldH)}.`
+                };
+            case 'sl_hit':
+                return {
+                    kind: 'no',
+                    text: `Ордер <b>${dir}</b> по <b>${pair}</b> сработал по ${fpPrice(o.fill_price)}, цена пробила <b>стоп</b> ${fpPrice(o.stop)} и закрылась по ${fpPrice(o.close_price)}. <b>Результат: ${fmtMoney(o.profit)}</b> — сценарий отменён, сработала защита стопа. Время в сделке: ${fmtHours(heldH)}.`
+                };
+            case 'manual_close': {
+                const profitKind = o.profit > 0 ? 'ok' : (o.profit < 0 ? 'no' : 'neutral');
+                return {
+                    kind: profitKind,
+                    text: `Ордер <b>${dir}</b> по <b>${pair}</b> сработал по ${fpPrice(o.fill_price)}, <b>закрыт вручную</b> по ${fpPrice(o.close_price)} (не дошёл ни до стопа ${fpPrice(o.stop)}, ни до цели ${fpPrice(o.take)}). <b>Результат: ${fmtMoney(o.profit)}</b>. Время в сделке: ${fmtHours(heldH)}.`
+                };
+            }
+            case 'closed_unknown':
+                return {
+                    kind: 'neutral',
+                    text: `Ордер по <b>${pair}</b> закрыт, но цена закрытия не зафиксирована. ${o.profit != null ? `Результат: ${fmtMoney(o.profit)}.` : ''}`
+                };
+            default:
+                return {
+                    kind: 'neutral',
+                    text: `Статус ордера: ${escapeHtml(o.status || 'неизвестен')}. Дополнительных данных нет.`
+                };
+        }
+    }
+
+    function buildOrderTooltipHtml(o) {
+        const statusBadge = badge(o.status);
+        const ticket = o.ticket ? `· Тикет ${o.ticket}` : '';
+        let html = `<div class="tt-title"><span>${escapeHtml(o.pair || '—')}</span><span style="font-weight:400;color:#787b86;font-size:12px">${ticket}</span>${statusBadge}</div>`;
+        html += `<div class="tt-body"><div class="tt-col-left">`;
+
+        html += `<h4>Контекст открытия</h4>`;
+        html += buildOrderContextItems(o);
+
+        html += `<h4>Чек-лист исхода</h4>`;
+        for (const item of buildOrderOutcomeItems(o)) {
+            html += `<div class="tt-check"><span class="mark ${item.mark}">${markChar(item.mark)}</span><span class="txt">${item.text}</span></div>`;
+        }
+
+        html += `</div><div class="tt-col-right">`;
+        const v = buildOrderVerdict(o);
+        html += `<h4>Что случилось</h4>`;
+        html += `<div class="tt-narrative ${v.kind}">${v.text}</div>`;
+
+        // Timing
+        const timingRows = [];
+        if (o.timestamp) timingRows.push(`<div class="tt-row"><span class="tt-label">Выставлен:</span><span class="tt-val">${fmtTimeFlex(o.timestamp)}</span></div>`);
+        if (o.fill_time)  timingRows.push(`<div class="tt-row"><span class="tt-label">Открыт:</span><span class="tt-val">${fmtTimeFlex(o.fill_time)}</span></div>`);
+        if (o.close_time) timingRows.push(`<div class="tt-row"><span class="tt-label">Закрыт:</span><span class="tt-val">${fmtTimeFlex(o.close_time)}</span></div>`);
+        if (timingRows.length) {
+            html += `<h4>Время</h4>` + timingRows.join('');
+        }
+        html += `</div></div>`;
+        return html;
+    }
+
+    // ─── Tooltip handlers ───
+    const orderTooltipEl = document.getElementById('orderTooltip');
+    let orderTooltipVisible = false;
+
+    function showOrderTooltip(idx, event) {
+        const o = displayedRows[idx];
+        if (!o) return;
+        orderTooltipEl.innerHTML = buildOrderTooltipHtml(o);
+        orderTooltipEl.style.display = 'block';
+        orderTooltipVisible = true;
+        positionOrderTooltip(event);
+    }
+    function positionOrderTooltip(event) {
+        if (!orderTooltipVisible) return;
+        const pad = 16;
+        let x = event.clientX + pad;
+        let y = event.clientY + pad;
+        const rect = orderTooltipEl.getBoundingClientRect();
+        if (x + rect.width > window.innerWidth)  x = event.clientX - rect.width  - pad;
+        if (y + rect.height > window.innerHeight) y = event.clientY - rect.height - pad;
+        if (x < 0) x = pad;
+        if (y < 0) y = pad;
+        orderTooltipEl.style.left = x + 'px';
+        orderTooltipEl.style.top  = y + 'px';
+    }
+    function hideOrderTooltip() {
+        orderTooltipEl.style.display = 'none';
+        orderTooltipVisible = false;
+    }
+    window.rowMouseEnter = function(idx, ev) { showOrderTooltip(idx, ev); };
+    window.rowMouseMove  = function(ev) { positionOrderTooltip(ev); };
+    window.rowMouseLeave = function() { hideOrderTooltip(); };
+
     function renderSummary(s) {
         const tiles = [
             ['Всего попыток', s.total_attempts, ''],
@@ -318,6 +703,7 @@
     }
 
     function renderRows(rows) {
+        displayedRows = rows;
         const tbody = document.getElementById('journalBody');
         if (!rows.length) {
             tbody.innerHTML = '<tr><td colspan="16" class="empty">Нет данных за выбранный период</td></tr>';
@@ -326,7 +712,7 @@
         tbody.innerHTML = rows.map((r, i) => {
             const dir = r.direction ? r.direction.toLowerCase() : '';
             return `
-                <tr data-idx="${i}">
+                <tr data-idx="${i}" onmouseenter="rowMouseEnter(${i}, event)" onmousemove="rowMouseMove(event)" onmouseleave="rowMouseLeave()">
                     <td><span class="toggle" onclick="toggleCtx(${i})">${r.signal_context ? '▸' : ''}</span></td>
                     <td>${fmtTime(r.timestamp)}</td>
                     <td><strong>${escapeHtml(r.pair || '')}</strong></td>
