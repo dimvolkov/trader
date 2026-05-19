@@ -1,0 +1,461 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Стратегии торговли — Forex</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            background: #131722;
+            color: #d1d4dc;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+        }
+        .header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 12px 20px;
+            background: #1e222d;
+            border-bottom: 1px solid #2a2e39;
+        }
+        .header-left {
+            display: flex;
+            align-items: center;
+            gap: 16px;
+        }
+        .header-left h1 {
+            font-size: 18px;
+            font-weight: 700;
+            color: #fff;
+        }
+        .header-left a {
+            color: #2962ff;
+            text-decoration: none;
+            font-size: 13px;
+        }
+        .header-left a:hover { text-decoration: underline; }
+        .content {
+            max-width: 880px;
+            margin: 0 auto;
+            padding: 24px 20px;
+            width: 100%;
+        }
+        .section { margin-bottom: 28px; }
+        .section h2 {
+            font-size: 14px;
+            color: #787b86;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin-bottom: 12px;
+        }
+        .source-card {
+            background: #1e222d;
+            border: 1px solid #2a2e39;
+            border-radius: 8px;
+            padding: 16px;
+            margin-bottom: 12px;
+        }
+        .source-card.active-source { border-color: #2962ff; }
+        .source-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 10px;
+        }
+        .source-name {
+            font-size: 15px;
+            font-weight: 700;
+            color: #fff;
+        }
+        .source-badge {
+            font-size: 11px;
+            padding: 2px 8px;
+            border-radius: 10px;
+            font-weight: 600;
+        }
+        .badge-active { background: rgba(38, 166, 154, 0.2); color: #26a69a; }
+        .badge-configured { background: rgba(41, 98, 255, 0.2); color: #2962ff; }
+        .badge-empty { background: rgba(120, 123, 134, 0.2); color: #787b86; }
+        .source-info {
+            font-size: 13px;
+            color: #b2b5be;
+            margin-bottom: 10px;
+            line-height: 1.55;
+        }
+        .source-info a, .prose a {
+            color: #2962ff;
+            text-decoration: none;
+        }
+        .source-info a:hover, .prose a:hover { text-decoration: underline; }
+        .btn {
+            background: #2a2e39;
+            color: #d1d4dc;
+            border: 1px solid #363a45;
+            padding: 8px 16px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 13px;
+            transition: background 0.2s;
+            white-space: nowrap;
+        }
+        .btn:hover { background: #363a45; }
+        .btn-primary { background: #2962ff; border-color: #2962ff; color: #fff; }
+        .btn-primary:hover { background: #1e4fd6; }
+        .btn-use { background: #26a69a; border-color: #26a69a; color: #fff; }
+        .btn:disabled,
+        .btn[disabled] {
+            opacity: 0.6;
+            cursor: not-allowed;
+        }
+        .btn-row { display: flex; gap: 8px; margin-top: 10px; }
+
+        .prose {
+            font-size: 13px;
+            line-height: 1.65;
+            color: #d1d4dc;
+        }
+        .prose p { margin-bottom: 10px; }
+        .prose ul, .prose ol { margin: 6px 0 10px 22px; }
+        .prose li { margin-bottom: 4px; }
+        .prose code {
+            background: #2a2e39;
+            color: #e0a96d;
+            padding: 1px 6px;
+            border-radius: 3px;
+            font-family: monospace;
+            font-size: 12px;
+        }
+        .phase {
+            background: #1e222d;
+            border: 1px solid #2a2e39;
+            border-left: 3px solid #2962ff;
+            border-radius: 6px;
+            padding: 14px 16px;
+            margin-bottom: 10px;
+        }
+        .phase h3 {
+            font-size: 14px;
+            font-weight: 700;
+            color: #fff;
+            margin-bottom: 8px;
+        }
+        .phase .tf-chip {
+            display: inline-block;
+            background: #2a2e39;
+            color: #787b86;
+            font-size: 10px;
+            padding: 1px 7px;
+            border-radius: 8px;
+            margin-left: 8px;
+            font-weight: 600;
+            letter-spacing: 0.3px;
+            vertical-align: middle;
+        }
+
+        table.params {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 13px;
+            margin-top: 6px;
+        }
+        table.params th, table.params td {
+            text-align: left;
+            padding: 8px 10px;
+            border-bottom: 1px solid #2a2e39;
+            vertical-align: top;
+        }
+        table.params th {
+            color: #787b86;
+            font-weight: 600;
+            font-size: 11px;
+            text-transform: uppercase;
+            letter-spacing: 0.4px;
+        }
+        table.params td.val {
+            font-family: monospace;
+            color: #26a69a;
+            white-space: nowrap;
+            width: 110px;
+        }
+        table.params td.src {
+            font-family: monospace;
+            color: #787b86;
+            font-size: 11px;
+            white-space: nowrap;
+            width: 230px;
+        }
+
+        .callout {
+            padding: 10px 14px;
+            border-radius: 6px;
+            margin-bottom: 8px;
+            font-size: 13px;
+            line-height: 1.55;
+        }
+        .callout-warn { background: rgba(239, 83, 80, 0.12); border-left: 3px solid #ef5350; }
+        .callout-info { background: rgba(41, 98, 255, 0.12); border-left: 3px solid #2962ff; }
+        .callout-ok   { background: rgba(38, 166, 154, 0.12); border-left: 3px solid #26a69a; }
+        .callout strong { color: #fff; }
+        .small { font-size: 11px; color: #787b86; margin-top: 4px; }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <div class="header-left">
+            <h1>Стратегии торговли</h1>
+            <a href="index.html">&larr; График</a>
+            <a href="scanner.html">Сканер</a>
+            <a href="journal.html">Журнал</a>
+            <a href="settings.html">&#9881; Настройки</a>
+        </div>
+    </div>
+
+    <div class="content">
+
+        <div class="section">
+            <h2>Активная стратегия</h2>
+            <div class="source-card active-source">
+                <div class="source-header">
+                    <span class="source-name">«Слом» (Breakout)</span>
+                    <span class="source-badge badge-active">Активна</span>
+                </div>
+                <div class="source-info">
+                    Импульсно-коррекционный анализ. Тренд по H1 → паттерн «Слом» из трёх сигналов на M30 → вход
+                    между Сигналом&nbsp;2 и Сигналом&nbsp;3, стоп за уровень слома, тейк на ближайшем уровне H1.
+                    Реализована в <code>server-scanner/scanner.js</code>.
+                </div>
+                <div class="btn-row">
+                    <button class="btn btn-use" disabled>Выбрана</button>
+                    <button class="btn btn-primary" onclick="scrollToDescription()">Подробнее</button>
+                </div>
+            </div>
+        </div>
+
+        <div class="section">
+            <h2>Доступные стратегии</h2>
+            <div class="source-card">
+                <div class="source-header">
+                    <span class="source-name">Уровни D1</span>
+                    <span class="source-badge badge-empty">В разработке</span>
+                </div>
+                <div class="source-info">
+                    Торговля от ключевых уровней D1/W1 с подтверждением на H4. Заготовка под будущее
+                    расширение — backend пока не реализован.
+                </div>
+            </div>
+            <div class="source-card">
+                <div class="source-header">
+                    <span class="source-name">Mean Reversion</span>
+                    <span class="source-badge badge-empty">В разработке</span>
+                </div>
+                <div class="source-info">
+                    Возврат к среднему во флэте: каналы Боллинджера + RSI на M30/H1. Концепт, не подключена
+                    к сканеру.
+                </div>
+            </div>
+            <div class="callout callout-info">
+                <strong>MVP-замечание.</strong> Сейчас выбор стратегии — заглушка: scanner всегда работает по
+                «Слому». Поля для переключения появятся, когда вторая стратегия будет реализована в коде.
+            </div>
+        </div>
+
+        <div class="section" id="strategy-description">
+            <h2>Описание стратегии «Слом»</h2>
+
+            <div class="prose">
+                <p>
+                    Стратегия основана на структуре импульсов и коррекций. Сначала на H1 определяется направление тренда
+                    и строятся уровни ожидания, затем на M30 ищется паттерн «Слом» — три последовательных сигнала, которые
+                    подтверждают разворот микротренда в сторону старшего тренда. Вход осуществляется на коррекции
+                    между вторым и третьим сигналом, стоп ставится за уровень, где сценарий отменяется, тейк — на
+                    ближайшем целевом уровне H1.
+                </p>
+            </div>
+
+            <div class="phase">
+                <h3>Фаза 1. Определение тренда <span class="tf-chip">H1</span></h3>
+                <div class="prose">
+                    <ul>
+                        <li>На H1 ищем локальные максимумы и минимумы (свинги).</li>
+                        <li><strong>Восходящий тренд:</strong> 2+ повышающихся максимума <em>и</em> 2+ повышающихся минимума.</li>
+                        <li><strong>Нисходящий тренд:</strong> 2+ понижающихся максимума <em>и</em> 2+ понижающихся минимума.</li>
+                        <li>Разметка импульсов и коррекций — свинги по 1–3 дня, без внутридневных микроструктур.</li>
+                    </ul>
+                    <p class="small">Код: <code>findSwingPoints</code> и <code>determineTrend</code> в <code>server-scanner/scanner.js</code> (~ строки 307–348).</p>
+                </div>
+            </div>
+
+            <div class="phase">
+                <h3>Фаза 2. Проверка продолжения / разворота <span class="tf-chip">H1</span></h3>
+                <div class="prose">
+                    <ul>
+                        <li><strong>Продолжение:</strong> цена пробивает предыдущий локальный экстремум в сторону тренда.</li>
+                        <li><strong>Разворот:</strong> коррекция становится больше предыдущего импульса <em>или</em> цена пробивает уровень начала прошлого импульса.</li>
+                        <li>На развороте — выход из направления, ждём формирования нового тренда.</li>
+                    </ul>
+                    <p class="small">Код: <code>segmentSwings</code>, <code>checkReversal</code> (~ строки 350–387).</p>
+                </div>
+            </div>
+
+            <div class="phase">
+                <h3>Фаза 3. Построение уровней <span class="tf-chip">H1</span></h3>
+                <div class="prose">
+                    <ul>
+                        <li>Два уровня ожидания: конец прошлого импульса и начало прошлого импульса.</li>
+                        <li>Целевой уровень — ближайший слева (конец/начало предыдущих свингов).</li>
+                        <li><strong>Только H1.</strong> Уровни с D1/W1 в этой стратегии не используются.</li>
+                    </ul>
+                    <p class="small">Код: <code>constructLevels</code> (~ строки 389–407).</p>
+                </div>
+            </div>
+
+            <div class="phase">
+                <h3>Фаза 4. Паттерн «Слом» <span class="tf-chip">M30</span></h3>
+                <div class="prose">
+                    <p>Когда цена H1 подошла к одному из уровней ожидания, переключаемся на M30 и ищем три сигнала:</p>
+                    <ol>
+                        <li><strong>Сигнал&nbsp;1 (импульс):</strong> цена пробивает основание прошлого микротренда M30 в сторону тренда H1 и продолжает движение.</li>
+                        <li><strong>Сигнал&nbsp;2 (коррекция):</strong> откат к пробитому уровню — допустимы недобой, касание или лёгкое пробитие.</li>
+                        <li><strong>Сигнал&nbsp;3 (новый импульс):</strong> цена пробивает основание Сигнала&nbsp;1; третья точка должна уйти дальше первой.</li>
+                    </ol>
+                    <p class="small">Код: <code>detectSlom</code> (~ строки 409–466), lookback по M30 = 4 свечи.</p>
+                </div>
+            </div>
+
+            <div class="phase">
+                <h3>Фаза 5. Вход в сделку <span class="tf-chip">M30</span></h3>
+                <div class="prose">
+                    <ul>
+                        <li>Точка входа — между Сигналом&nbsp;2 и Сигналом&nbsp;3, на коррекции после первого импульса слома.</li>
+                        <li>Направление строго по тренду H1: восходящий → только покупки, нисходящий → только продажи.</li>
+                        <li>Стоп-лосс — за уровень слома (за основание микротренда M30). Буфер: 50% между Сигналом&nbsp;1 и Сигналом&nbsp;2.</li>
+                    </ul>
+                    <p class="small">Код: <code>computeEntry</code> (~ строки 468–490).</p>
+                </div>
+            </div>
+
+            <div class="phase">
+                <h3>Фаза 6. Управление сделкой <span class="tf-chip">H1</span></h3>
+                <div class="prose">
+                    <ul>
+                        <li>Тейк-профит — ближайший целевой уровень H1 слева в сторону тренда.</li>
+                        <li>При пробое цели формируется новый диапазон до следующего уровня (возможен доп. вход).</li>
+                        <li>R:R — минимум 2:1–3:1 при закрытии на ближайшем уровне, до 5:1 на весь импульс H1.</li>
+                    </ul>
+                </div>
+            </div>
+        </div>
+
+        <div class="section">
+            <h2>Параметры (зашиты в коде)</h2>
+            <div class="source-card">
+                <table class="params">
+                    <thead>
+                        <tr>
+                            <th>Параметр</th>
+                            <th>Значение</th>
+                            <th>Источник</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td>Минимальный R:R для сигнала</td>
+                            <td class="val">3.0</td>
+                            <td class="src">scanner.js: computeEntry</td>
+                        </tr>
+                        <tr>
+                            <td>Lookback свингов на H1</td>
+                            <td class="val">5 свечей</td>
+                            <td class="src">scanner.js: analyzePair</td>
+                        </tr>
+                        <tr>
+                            <td>Lookback свингов на M30</td>
+                            <td class="val">4 свечи</td>
+                            <td class="src">scanner.js: detectSlom</td>
+                        </tr>
+                        <tr>
+                            <td>Буфер стоп-лосса</td>
+                            <td class="val">50%</td>
+                            <td class="src">scanner.js: computeEntry</td>
+                        </tr>
+                        <tr>
+                            <td>Глубина анализа</td>
+                            <td class="val">200 / 150 свечей</td>
+                            <td class="src">scanner.js: fetchTimeSeries</td>
+                        </tr>
+                        <tr>
+                            <td>Минимум повышающихся/понижающихся экстремумов</td>
+                            <td class="val">2 + 2</td>
+                            <td class="src">scanner.js: determineTrend</td>
+                        </tr>
+                    </tbody>
+                </table>
+                <p class="small" style="margin-top:10px">
+                    Эти значения сейчас не редактируются через UI — изменить можно только в коде
+                    <code>server-scanner/scanner.js</code>. Параметризация запланирована вместе с появлением второй стратегии.
+                </p>
+            </div>
+        </div>
+
+        <div class="section">
+            <h2>Когда «Слом» не работает</h2>
+            <div class="callout callout-warn">
+                <strong>Слом сформирован не на уровне H1.</strong> Нет опоры — разворот не подтверждён структурой,
+                пропускаем сделку.
+            </div>
+            <div class="callout callout-warn">
+                <strong>После слома цена зафлетила</strong> или сам слом сформирован внутри флэта — флэт на старшем
+                ТФ отменяет сигнал младшего.
+            </div>
+            <div class="callout callout-warn">
+                <strong>Слом без закрепления.</strong> Цена улетела на новостях/волатильности — нет точки входа с
+                адекватным стопом, в догонку не заходим.
+            </div>
+        </div>
+
+        <div class="section">
+            <h2>Чек-лист перед сделкой</h2>
+            <div class="source-card">
+                <div class="prose">
+                    <ol>
+                        <li>Тренд H1 определён и размечен.</li>
+                        <li>Текущая фаза — коррекция, и она подошла к одному из уровней H1.</li>
+                        <li>Направление сделки совпадает с импульсом H1.</li>
+                        <li>Уровни построены строго по H1 — без D1/W1 и случайных совпадений.</li>
+                        <li>Паттерн «Слом» на M30 завершён — есть все три сигнала.</li>
+                        <li>Стоп-лосс — за уровнем слома, где сценарий отменяется.</li>
+                        <li>Торговый диапазон до целевого уровня определён.</li>
+                        <li>R:R ≥ 2:1 (фильтр scanner — ≥ 3:1).</li>
+                    </ol>
+                </div>
+            </div>
+        </div>
+
+        <div class="section">
+            <h2>Где меняется поведение</h2>
+            <div class="source-card">
+                <div class="prose">
+                    <p>В этом MVP «выбор стратегии» — только информационный. Реальные параметры по-прежнему живут в существующих разделах:</p>
+                    <ul>
+                        <li>Параметры pending-ордеров, фильтр по winrate, watcher — <a href="settings.html">→ Настройки → Pending</a>.</li>
+                        <li>Watchlist пар, источник данных, ручной запуск сканирования — <a href="scanner.html">→ Сканер</a>.</li>
+                        <li>Расписание и риск (через env) — переменные <code>SCHEDULE_FROM</code>, <code>SCHEDULE_TO</code>, <code>DEPOSIT</code>, <code>RISK_PCT</code>.</li>
+                    </ul>
+                </div>
+            </div>
+        </div>
+
+    </div>
+
+    <script>
+        function scrollToDescription() {
+            const el = document.getElementById('strategy-description');
+            if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        }
+    </script>
+</body>
+</html>
