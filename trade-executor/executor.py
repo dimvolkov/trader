@@ -192,6 +192,13 @@ async def account(x_api_secret: str = Header(None)):
     return result
 
 
+@app.get("/terminal")
+async def terminal(x_api_secret: str = Header(None)):
+    """MT5 terminal status: broker connection + algo-trading permission."""
+    require_auth(x_api_secret)
+    return mt5_bridge.terminal_info()
+
+
 @app.get("/positions")
 async def positions(x_api_secret: str = Header(None)):
     require_auth(x_api_secret)

@@ -1187,6 +1187,100 @@ async function handleChat(req, res) {
     }
 }
 
+async function callExecutor(path, { auth = true, timeoutMs = 8000 } = {}) {
+    const t0 = Date.now();
+    try {
+        const headers = auth ? { 'X-API-Secret': CONFIG.executorSecret } : {};
+        const r = await fetchWithTimeout(`${CONFIG.executorUrl}${path}`, { headers }, timeoutMs);
+        const ms = Date.now() - t0;
+        const text = await r.text();
+        let data = null;
+        try { data = JSON.parse(text); } catch { /* leave raw */ }
+        return { ok: r.ok, status: r.status, data, raw: text, ms };
+    } catch (err) {
+        return { ok: false, status: 0, data: null, error: err.message, ms: Date.now() - t0 };
+    }
+}
+
+async function runHealthCheck() {
+    const checks = [];
+    const add = (name, status, message, detail) => checks.push({ name, status, message, detail });
+
+    if (!CONFIG.executorUrl || !CONFIG.executorSecret) {
+        add('Конфигурация executor', 'fail',
+            'EXECUTOR_URL или EXECUTOR_API_SECRET не заданы в окружении сканера.');
+        return { success: false, configured: false, checks };
+    }
+    add('Конфигурация executor', 'ok', `URL: ${CONFIG.executorUrl}`);
+
+    // 1. Reachability — /health (no auth)
+    const h = await callExecutor('/health', { auth: false, timeoutMs: 5000 });
+    if (h.ok && h.data && h.data.status === 'ok') {
+        add('Executor отвечает (/health)', 'ok', `HTTP 200 за ${h.ms} мс`);
+    } else {
+        const msg = h.error
+            ? `Сеть: ${h.error}`
+            : `HTTP ${h.status}${h.raw ? ` — ${h.raw.slice(0, 200)}` : ''}`;
+        add('Executor отвечает (/health)', 'fail', msg);
+        return { success: false, configured: true, checks };
+    }
+
+    // 2. MT5 terminal status — /terminal (auth)
+    const t = await callExecutor('/terminal');
+    if (t.status === 404) {
+        add('Терминал MT5 (/terminal)', 'skip',
+            'Старая версия executor.py — обнови (git pull + перезапуск scheduled task).');
+    } else if (t.ok && t.data && t.data.success) {
+        const td = t.data;
+        add('Терминал MT5 запущен', 'ok',
+            `${td.name || 'MetaTrader 5'} build ${td.build || '?'} (${td.company || '—'})`);
+        if (td.connected) {
+            add('Соединение с брокером', 'ok', 'connected = true');
+        } else {
+            add('Соединение с брокером', 'fail',
+                'MT5 не подключён к торговому серверу. Залогинься в торговый счёт.');
+        }
+        if (td.trade_allowed && !td.tradeapi_disabled) {
+            add('Алготрейдинг разрешён', 'ok', 'AutoTrading включён в терминале');
+        } else {
+            const reason = td.tradeapi_disabled
+                ? 'API торговли запрещён (Tools → Options → Expert Advisors).'
+                : 'Кнопка AutoTrading выключена в MT5.';
+            add('Алготрейдинг разрешён', 'fail', reason);
+        }
+    } else {
+        const err = (t.data && t.data.detail) || t.error || `HTTP ${t.status}`;
+        add('Терминал MT5 (/terminal)', 'fail', `MT5 недоступен: ${err}`);
+    }
+
+    // 3. Account info — /account (auth)
+    const a = await callExecutor('/account');
+    if (a.ok && a.data && a.data.success) {
+        const ad = a.data;
+        const fmt = (v) => Number(v).toLocaleString('ru-RU', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+        add('Счёт MT5 подключён', 'ok',
+            `Login ${ad.login} @ ${ad.server} · ${fmt(ad.balance)} ${ad.currency} · плечо 1:${ad.leverage}`,
+            { balance: ad.balance, equity: ad.equity, free_margin: ad.free_margin, currency: ad.currency });
+    } else {
+        const err = (a.data && a.data.detail) || a.error || `HTTP ${a.status}`;
+        add('Счёт MT5 подключён', 'fail', `Не получили account_info: ${err}`);
+    }
+
+    // 4. Live quote — /symbol/EURUSD (auth) — проверяет, что котировки идут от брокера
+    const s = await callExecutor('/symbol/EURUSD');
+    if (s.ok && s.data && s.data.success && s.data.bid > 0 && s.data.ask > 0) {
+        const sd = s.data;
+        add('Котировки от брокера', 'ok',
+            `${sd.symbol}: bid ${sd.bid} / ask ${sd.ask} · spread ${sd.spread}`);
+    } else {
+        const err = (s.data && (s.data.error || s.data.detail)) || s.error || `HTTP ${s.status}`;
+        add('Котировки от брокера', 'fail', `EURUSD недоступен: ${err}`);
+    }
+
+    const success = checks.every(c => c.status !== 'fail');
+    return { success, configured: true, checks };
+}
+
 async function proxyExecutor(req, res, path) {
     if (!CONFIG.executorUrl || !CONFIG.executorSecret) {
         return reply(res, 503, { success: false, error: 'Executor not configured' });
@@ -1235,6 +1329,10 @@ const apiServer = http.createServer(async (req, res) => {
                 return reply(res, 200, { success: true, balance: acc.balance, equity: acc.equity, free_margin: acc.free_margin, currency: acc.currency, leverage: acc.leverage });
             }
             return reply(res, 503, { success: false, error: 'MT5 unavailable' });
+        }
+
+        if (p === '/api/health-check' && req.method === 'GET') {
+            return reply(res, 200, await runHealthCheck());
         }
 
         if (p === '/api/send-balance-telegram') {

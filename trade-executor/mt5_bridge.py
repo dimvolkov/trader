@@ -97,6 +97,28 @@ def account_info() -> dict:
         "free_margin": info.margin_free,
         "currency": info.currency,
         "leverage": info.leverage,
+        "trade_allowed": bool(getattr(info, "trade_allowed", True)),
+    }
+
+
+def terminal_info() -> dict:
+    """Get MT5 terminal status — connection, algo-trading permission, build."""
+    if not _ensure_initialized():
+        return {"success": False, "error": str(mt5.last_error())}
+
+    info = mt5.terminal_info()
+    if info is None:
+        return {"success": False, "error": "No terminal info"}
+
+    return {
+        "success": True,
+        "connected": bool(info.connected),
+        "trade_allowed": bool(info.trade_allowed),
+        "tradeapi_disabled": bool(info.tradeapi_disabled),
+        "name": info.name,
+        "company": info.company,
+        "build": info.build,
+        "path": info.path,
     }
 
 
