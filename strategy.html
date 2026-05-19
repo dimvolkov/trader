@@ -248,6 +248,149 @@
             border-top: 2px dashed currentColor;
             width: 16px;
         }
+
+        .chat-card { padding: 16px 18px; }
+        .chat-header-row {
+            display: flex;
+            align-items: baseline;
+            justify-content: space-between;
+            gap: 12px;
+            flex-wrap: wrap;
+            margin-bottom: 8px;
+        }
+        .chat-subtitle {
+            font-size: 11px;
+            color: #787b86;
+        }
+        .chat-log {
+            background: #131722;
+            border: 1px solid #2a2e39;
+            border-radius: 6px;
+            padding: 12px;
+            min-height: 160px;
+            max-height: 360px;
+            overflow-y: auto;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            margin: 8px 0;
+        }
+        .chat-empty {
+            color: #787b86;
+            font-size: 12px;
+            text-align: center;
+            padding: 20px 8px;
+            line-height: 1.55;
+        }
+        .chat-msg {
+            max-width: 86%;
+            padding: 8px 12px;
+            border-radius: 10px;
+            font-size: 13px;
+            line-height: 1.55;
+            white-space: pre-wrap;
+            word-wrap: break-word;
+        }
+        .chat-msg.user {
+            align-self: flex-end;
+            background: #2962ff;
+            color: #fff;
+            border-bottom-right-radius: 2px;
+        }
+        .chat-msg.assistant {
+            align-self: flex-start;
+            background: #2a2e39;
+            color: #d1d4dc;
+            border-bottom-left-radius: 2px;
+        }
+        .chat-msg.error {
+            align-self: flex-start;
+            background: rgba(239, 83, 80, 0.18);
+            color: #ef9a99;
+            border: 1px solid rgba(239, 83, 80, 0.35);
+            border-bottom-left-radius: 2px;
+        }
+        .chat-msg.pending {
+            align-self: flex-start;
+            background: #2a2e39;
+            color: #787b86;
+            font-style: italic;
+            border-bottom-left-radius: 2px;
+        }
+        .chat-suggestions {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 6px;
+            margin-bottom: 8px;
+        }
+        .chat-chip {
+            background: #2a2e39;
+            color: #d1d4dc;
+            border: 1px solid #363a45;
+            padding: 4px 10px;
+            border-radius: 12px;
+            font-size: 12px;
+            cursor: pointer;
+            transition: background 0.15s, border-color 0.15s;
+        }
+        .chat-chip:hover {
+            background: #363a45;
+            border-color: #2962ff;
+        }
+        .chat-input-row {
+            display: flex;
+            gap: 8px;
+            align-items: flex-end;
+        }
+        .chat-input {
+            flex: 1;
+            background: #2a2e39;
+            color: #fff;
+            border: 1px solid #363a45;
+            border-radius: 4px;
+            padding: 8px 12px;
+            font-size: 13px;
+            font-family: inherit;
+            line-height: 1.4;
+            resize: none;
+            min-height: 38px;
+            max-height: 110px;
+            outline: none;
+        }
+        .chat-input:focus { border-color: #2962ff; }
+        .chat-input::placeholder { color: #4a4e59; }
+        .chat-footer-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 12px;
+            margin-top: 8px;
+        }
+        .chat-disclaimer {
+            font-size: 11px;
+            color: #787b86;
+        }
+        .chat-clear {
+            background: transparent;
+            color: #787b86;
+            border: none;
+            font-size: 11px;
+            cursor: pointer;
+            text-decoration: underline;
+            padding: 2px 0;
+        }
+        .chat-clear:hover { color: #ef5350; }
+        .chat-warning {
+            background: rgba(255, 193, 7, 0.12);
+            border-left: 3px solid #ffc107;
+            color: #ffc107;
+            padding: 8px 12px;
+            border-radius: 4px;
+            font-size: 12px;
+            line-height: 1.5;
+            margin-bottom: 8px;
+        }
+        .chat-warning a { color: #ffc107; text-decoration: underline; }
     </style>
 </head>
 <body>
@@ -649,6 +792,39 @@
             </div>
         </div>
 
+        <div class="section">
+            <h2>Спросить ИИ-ассистента</h2>
+            <div class="source-card chat-card">
+                <div class="chat-header-row">
+                    <span class="source-name">Ассистент по стратегии «Слом»</span>
+                    <span class="chat-subtitle">Anthropic Claude · контекст стратегии загружен</span>
+                </div>
+
+                <div id="chatWarning" class="chat-warning" style="display:none"></div>
+
+                <div class="chat-suggestions" id="chatSuggestions">
+                    <button class="chat-chip" type="button">Объясни Сигнал 2</button>
+                    <button class="chat-chip" type="button">Где ставится стоп?</button>
+                    <button class="chat-chip" type="button">Когда «Слом» не работает?</button>
+                    <button class="chat-chip" type="button">Почему минимальный R:R = 3?</button>
+                    <button class="chat-chip" type="button">Как улучшить точку входа?</button>
+                </div>
+
+                <div class="chat-log" id="chatLog"></div>
+
+                <div class="chat-input-row">
+                    <textarea id="chatInput" class="chat-input" rows="1"
+                        placeholder="Спросите что-нибудь про стратегию… (Enter — отправить, Shift+Enter — перенос)"></textarea>
+                    <button id="chatSend" class="btn btn-primary">Отправить</button>
+                </div>
+
+                <div class="chat-footer-row">
+                    <span class="chat-disclaimer">Ответы генерирует Claude. Не финансовый совет.</span>
+                    <button id="chatClear" class="chat-clear" type="button">Очистить чат</button>
+                </div>
+            </div>
+        </div>
+
     </div>
 
     <script>
@@ -656,6 +832,168 @@
             const el = document.getElementById('strategy-description');
             if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
         }
+
+        // ─── Strategy chat ───
+        const CHAT_HISTORY_KEY = 'strategyChatHistory';
+        const CHAT_MAX_HISTORY = 30;
+
+        const chatLog = document.getElementById('chatLog');
+        const chatInput = document.getElementById('chatInput');
+        const chatSend = document.getElementById('chatSend');
+        const chatClear = document.getElementById('chatClear');
+        const chatWarning = document.getElementById('chatWarning');
+        const chatSuggestions = document.getElementById('chatSuggestions');
+
+        let chatHistory = loadHistory();
+        let chatBusy = false;
+
+        function adminSecret() {
+            return localStorage.getItem('scannerAdminSecret') || '';
+        }
+
+        function loadHistory() {
+            try {
+                const raw = localStorage.getItem(CHAT_HISTORY_KEY);
+                if (!raw) return [];
+                const arr = JSON.parse(raw);
+                if (!Array.isArray(arr)) return [];
+                return arr.filter(m => m && (m.role === 'user' || m.role === 'assistant') && typeof m.content === 'string');
+            } catch { return []; }
+        }
+
+        function saveHistory() {
+            try { localStorage.setItem(CHAT_HISTORY_KEY, JSON.stringify(chatHistory)); }
+            catch { /* quota — ignore */ }
+        }
+
+        function refreshWarning() {
+            if (!adminSecret()) {
+                chatWarning.innerHTML = 'Не задан admin secret. Откройте <a href="settings.html">Настройки → Pending</a>, сохраните его и вернитесь — без секрета чат не работает.';
+                chatWarning.style.display = '';
+                chatSend.disabled = true;
+                chatInput.disabled = true;
+            } else {
+                chatWarning.style.display = 'none';
+                chatSend.disabled = chatBusy;
+                chatInput.disabled = chatBusy;
+            }
+        }
+
+        function renderLog() {
+            chatLog.innerHTML = '';
+            if (chatHistory.length === 0) {
+                const empty = document.createElement('div');
+                empty.className = 'chat-empty';
+                empty.textContent = 'Задайте вопрос про стратегию «Слом» — фазы, сигналы, параметры, ошибки исполнения, идеи улучшения.';
+                chatLog.appendChild(empty);
+                return;
+            }
+            for (const m of chatHistory) {
+                appendBubble(m.role, m.content);
+            }
+            chatLog.scrollTop = chatLog.scrollHeight;
+        }
+
+        function appendBubble(role, text, extraClass) {
+            const el = document.createElement('div');
+            el.className = 'chat-msg ' + role + (extraClass ? ' ' + extraClass : '');
+            el.textContent = text;
+            chatLog.appendChild(el);
+            chatLog.scrollTop = chatLog.scrollHeight;
+            return el;
+        }
+
+        async function sendMessage(text) {
+            if (chatBusy) return;
+            const trimmed = text.trim();
+            if (!trimmed) return;
+            const secret = adminSecret();
+            if (!secret) { refreshWarning(); return; }
+
+            chatHistory.push({ role: 'user', content: trimmed });
+            if (chatHistory.length > CHAT_MAX_HISTORY) {
+                chatHistory = chatHistory.slice(-CHAT_MAX_HISTORY);
+            }
+            saveHistory();
+            // Remove empty placeholder if present
+            if (chatLog.querySelector('.chat-empty')) chatLog.innerHTML = '';
+            appendBubble('user', trimmed);
+
+            const pending = appendBubble('assistant', 'Ассистент думает…', 'pending');
+
+            chatBusy = true;
+            chatSend.disabled = true;
+            chatInput.disabled = true;
+            chatInput.value = '';
+            autoresize();
+
+            try {
+                const res = await fetch('/api/chat', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-Admin-Secret': secret,
+                    },
+                    body: JSON.stringify({ messages: chatHistory }),
+                });
+                const data = await res.json().catch(() => ({ success: false, error: 'bad response' }));
+                pending.remove();
+                if (!res.ok || !data.success) {
+                    const errText = (data && data.error) ? data.error : ('HTTP ' + res.status);
+                    appendBubble('assistant', 'Ошибка: ' + errText, 'error');
+                } else {
+                    const reply = (data.reply || '').trim() || '(пустой ответ)';
+                    chatHistory.push({ role: 'assistant', content: reply });
+                    if (chatHistory.length > CHAT_MAX_HISTORY) {
+                        chatHistory = chatHistory.slice(-CHAT_MAX_HISTORY);
+                    }
+                    saveHistory();
+                    appendBubble('assistant', reply);
+                }
+            } catch (err) {
+                pending.remove();
+                appendBubble('assistant', 'Сеть недоступна: ' + err.message, 'error');
+            } finally {
+                chatBusy = false;
+                refreshWarning();
+                chatInput.focus();
+            }
+        }
+
+        function autoresize() {
+            chatInput.style.height = 'auto';
+            chatInput.style.height = Math.min(chatInput.scrollHeight, 110) + 'px';
+        }
+
+        chatInput.addEventListener('input', autoresize);
+        chatInput.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                sendMessage(chatInput.value);
+            }
+        });
+        chatSend.addEventListener('click', () => sendMessage(chatInput.value));
+        chatClear.addEventListener('click', () => {
+            if (!chatHistory.length) return;
+            if (!confirm('Очистить историю чата?')) return;
+            chatHistory = [];
+            localStorage.removeItem(CHAT_HISTORY_KEY);
+            renderLog();
+        });
+        chatSuggestions.querySelectorAll('.chat-chip').forEach(btn => {
+            btn.addEventListener('click', () => {
+                chatInput.value = btn.textContent;
+                autoresize();
+                chatInput.focus();
+            });
+        });
+
+        window.addEventListener('storage', (e) => {
+            if (e.key === 'scannerAdminSecret') refreshWarning();
+        });
+
+        renderLog();
+        refreshWarning();
     </script>
 </body>
 </html>

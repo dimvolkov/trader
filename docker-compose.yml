@@ -43,6 +43,9 @@ services:
       - AUTO_TRADE=${AUTO_TRADE:-false}
       # Admin secret для /api/pending-config (UI настроек pending)
       - SCANNER_ADMIN_SECRET=${SCANNER_ADMIN_SECRET:-}
+      # Anthropic Claude (чат-ассистент на странице стратегии)
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - CLAUDE_MODEL=${CLAUDE_MODEL:-claude-sonnet-4-6}
       # JSON-файл live-конфига отложенных ордеров
       - PENDING_CONFIG_FILE=/data/pending_config.json
     volumes:

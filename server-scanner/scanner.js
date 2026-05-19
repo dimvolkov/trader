@@ -46,6 +46,10 @@ const CONFIG = {
 
     // Admin secret for /api/pending-config write endpoint (settings UI)
     adminSecret: process.env.SCANNER_ADMIN_SECRET || '',
+
+    // Anthropic Claude (strategy chat assistant)
+    anthropicApiKey: process.env.ANTHROPIC_API_KEY || '',
+    anthropicModel: process.env.CLAUDE_MODEL || 'claude-sonnet-4-6',
 };
 
 const MAX_RISK = CONFIG.deposit * CONFIG.riskPct;
@@ -1043,6 +1047,146 @@ function requireAdmin(req) {
     return req.headers['x-admin-secret'] === CONFIG.adminSecret;
 }
 
+// ─── Strategy chat (Anthropic Claude) ───
+const fs = require('fs');
+const path = require('path');
+
+const STRATEGY_DOC = (() => {
+    try {
+        return fs.readFileSync(path.join(__dirname, 'trading_algorithm.md'), 'utf-8');
+    } catch (err) {
+        log(`[chat] trading_algorithm.md not loaded: ${err.message}`);
+        return '';
+    }
+})();
+
+const STRATEGY_SYSTEM_PROMPT = [
+    'Ты — ассистент по торговой стратегии «Слом» (breakout по импульсам и коррекциям).',
+    'Отвечай по-русски, кратко и конкретно. Опирайся ТОЛЬКО на материалы ниже.',
+    'Если вопрос вне темы стратегии — мягко перенаправь к ней.',
+    'Если пользователь предлагает изменения параметров — обсуждай как идеи, не как готовые решения;',
+    'не выдавай рекомендации как финансовые советы.',
+    '',
+    '=== Полный мануал стратегии ===',
+    STRATEGY_DOC || '(документ не загружен)',
+    '',
+    '=== Параметры, зашитые в scanner.js ===',
+    '- Минимальный R:R для сигнала: 3.0',
+    '- Lookback свингов на H1: 5 свечей',
+    '- Lookback свингов на M30: 4 свечи',
+    '- Буфер стоп-лосса: 50% расстояния между Сигналом 1 и Сигналом 2',
+    '- Глубина анализа: 200 свечей (twelvedata) / 150 свечей (остальные источники)',
+    '- Условия тренда H1: 2+ повышающихся максимумов и 2+ повышающихся минимумов (для up; зеркально для down)',
+].join('\n');
+
+const CHAT_RATE_WINDOW_MS = 60_000;
+const CHAT_RATE_LIMIT = 15;
+const chatRateBuckets = new Map();
+
+function chatRateAllow(ip) {
+    const now = Date.now();
+    const bucket = (chatRateBuckets.get(ip) || []).filter(t => now - t < CHAT_RATE_WINDOW_MS);
+    if (bucket.length >= CHAT_RATE_LIMIT) {
+        chatRateBuckets.set(ip, bucket);
+        return false;
+    }
+    bucket.push(now);
+    chatRateBuckets.set(ip, bucket);
+    return true;
+}
+
+function clientIp(req) {
+    const fwd = req.headers['x-forwarded-for'];
+    if (fwd) return String(fwd).split(',')[0].trim();
+    return req.socket.remoteAddress || 'unknown';
+}
+
+async function handleChat(req, res) {
+    if (!requireAdmin(req)) return reply(res, 401, { success: false, error: 'admin secret required' });
+    if (!CONFIG.anthropicApiKey) {
+        return reply(res, 503, { success: false, error: 'Anthropic API key not configured on server' });
+    }
+    if (!chatRateAllow(clientIp(req))) {
+        return reply(res, 429, { success: false, error: 'too many requests, slow down' });
+    }
+
+    let body;
+    try { body = await jsonBody(req); }
+    catch { return reply(res, 400, { success: false, error: 'bad JSON' }); }
+
+    const messages = Array.isArray(body.messages) ? body.messages : null;
+    if (!messages || messages.length === 0) {
+        return reply(res, 400, { success: false, error: 'messages must be a non-empty array' });
+    }
+    if (messages.length > 30) {
+        return reply(res, 400, { success: false, error: 'too many messages (max 30)' });
+    }
+    let userChars = 0;
+    for (const m of messages) {
+        if (!m || (m.role !== 'user' && m.role !== 'assistant') || typeof m.content !== 'string') {
+            return reply(res, 400, { success: false, error: 'invalid message shape' });
+        }
+        if (m.role === 'user') userChars += m.content.length;
+    }
+    if (userChars > 8000) {
+        return reply(res, 400, { success: false, error: 'user content too long (max 8000 chars)' });
+    }
+    if (messages[messages.length - 1].role !== 'user') {
+        return reply(res, 400, { success: false, error: 'last message must be from user' });
+    }
+
+    const payload = {
+        model: CONFIG.anthropicModel,
+        max_tokens: 1024,
+        temperature: 0.3,
+        system: [{
+            type: 'text',
+            text: STRATEGY_SYSTEM_PROMPT,
+            cache_control: { type: 'ephemeral' },
+        }],
+        messages: messages.map(m => ({ role: m.role, content: m.content })),
+    };
+
+    try {
+        const r = await fetchWithTimeout('https://api.anthropic.com/v1/messages', {
+            method: 'POST',
+            headers: {
+                'x-api-key': CONFIG.anthropicApiKey,
+                'anthropic-version': '2023-06-01',
+                'content-type': 'application/json',
+            },
+            body: JSON.stringify(payload),
+        }, 60_000);
+
+        if (!r.ok) {
+            const errText = await r.text().catch(() => '');
+            console.error(`[chat] Anthropic ${r.status}: ${errText.slice(0, 500)}`);
+            const msg = r.status === 401 ? 'invalid Anthropic API key'
+                      : r.status === 429 ? 'Anthropic rate limit hit, try later'
+                      : `LLM error (HTTP ${r.status})`;
+            return reply(res, 502, { success: false, error: msg });
+        }
+
+        const data = await r.json();
+        const reply_text = (data.content || [])
+            .filter(b => b && b.type === 'text')
+            .map(b => b.text)
+            .join('\n')
+            .trim();
+        const usage = data.usage || {};
+        log(`[chat] reply ${data.stop_reason} in=${usage.input_tokens} out=${usage.output_tokens} cache_read=${usage.cache_read_input_tokens || 0} cache_create=${usage.cache_creation_input_tokens || 0}`);
+        return reply(res, 200, {
+            success: true,
+            reply: reply_text,
+            stop_reason: data.stop_reason,
+            usage,
+        });
+    } catch (err) {
+        console.error(`[chat] fetch error: ${err.message}`);
+        return reply(res, 502, { success: false, error: 'failed to reach LLM' });
+    }
+}
+
 async function proxyExecutor(req, res, path) {
     if (!CONFIG.executorUrl || !CONFIG.executorSecret) {
         return reply(res, 503, { success: false, error: 'Executor not configured' });
@@ -1261,6 +1405,11 @@ const apiServer = http.createServer(async (req, res) => {
             } catch (err) {
                 return reply(res, 502, { success: false, error: err.message });
             }
+        }
+
+        // ─── Strategy chat (Anthropic Claude) ───
+        if (p === '/api/chat' && req.method === 'POST') {
+            return handleChat(req, res);
         }
 
         return reply(res, 404, { error: 'not found' });
