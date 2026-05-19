@@ -181,6 +181,36 @@
             box-shadow: 0 8px 24px rgba(0,0,0,0.5);
             line-height: 1.6;
         }
+        .order-tooltip.pinned {
+            pointer-events: auto;
+            user-select: text;
+            border-color: #2962ff;
+        }
+        .order-tooltip .tt-close {
+            position: absolute;
+            top: 6px;
+            right: 8px;
+            background: transparent;
+            border: none;
+            color: #787b86;
+            font-size: 16px;
+            cursor: pointer;
+            padding: 2px 6px;
+            line-height: 1;
+            display: none;
+        }
+        .order-tooltip .tt-close:hover { color: #fff; }
+        .order-tooltip.pinned .tt-close { display: block; }
+        .order-tooltip .tt-hint {
+            margin-top: 8px;
+            padding-top: 6px;
+            border-top: 1px solid #2a2e39;
+            font-size: 10px;
+            color: #4a4d57;
+            text-align: center;
+        }
+        .order-tooltip.pinned .tt-hint { color: #787b86; }
+        tr[data-idx] { cursor: pointer; }
         .order-tooltip h4 {
             color: #787b86;
             font-size: 11px;
@@ -644,17 +674,27 @@
     // ─── Tooltip handlers ───
     const orderTooltipEl = document.getElementById('orderTooltip');
     let orderTooltipVisible = false;
+    let orderTooltipPinned = false;
 
+    function renderTooltipInto(o, pinned) {
+        const close = `<button class="tt-close" onclick="unpinOrderTooltip()" title="Закрыть">✕</button>`;
+        const hint = pinned
+            ? `<div class="tt-hint">Закреплено — выделите и скопируйте текст. Esc или ✕ — закрыть.</div>`
+            : `<div class="tt-hint">Клик на строке закрепит подсказку для копирования</div>`;
+        orderTooltipEl.innerHTML = close + buildOrderTooltipHtml(o) + hint;
+    }
     function showOrderTooltip(idx, event) {
+        if (orderTooltipPinned) return;
         const o = displayedRows[idx];
         if (!o) return;
-        orderTooltipEl.innerHTML = buildOrderTooltipHtml(o);
+        renderTooltipInto(o, false);
+        orderTooltipEl.classList.remove('pinned');
         orderTooltipEl.style.display = 'block';
         orderTooltipVisible = true;
         positionOrderTooltip(event);
     }
     function positionOrderTooltip(event) {
-        if (!orderTooltipVisible) return;
+        if (!orderTooltipVisible || orderTooltipPinned) return;
         const pad = 16;
         let x = event.clientX + pad;
         let y = event.clientY + pad;
@@ -667,12 +707,52 @@
         orderTooltipEl.style.top  = y + 'px';
     }
     function hideOrderTooltip() {
+        if (orderTooltipPinned) return;
         orderTooltipEl.style.display = 'none';
         orderTooltipVisible = false;
     }
+    function pinOrderTooltip(idx, event) {
+        const o = displayedRows[idx];
+        if (!o) return;
+        // Position relative to mouse for first render, then freeze
+        renderTooltipInto(o, true);
+        orderTooltipEl.classList.add('pinned');
+        orderTooltipEl.style.display = 'block';
+        orderTooltipVisible = true;
+        // Snap position to current mouse so user knows where it locked
+        const fakeEvt = { clientX: event.clientX, clientY: event.clientY };
+        orderTooltipPinned = false;       // temporarily allow positioning
+        positionOrderTooltip(fakeEvt);
+        orderTooltipPinned = true;
+    }
+    window.unpinOrderTooltip = function() {
+        orderTooltipPinned = false;
+        orderTooltipEl.classList.remove('pinned');
+        orderTooltipEl.style.display = 'none';
+        orderTooltipVisible = false;
+    };
     window.rowMouseEnter = function(idx, ev) { showOrderTooltip(idx, ev); };
     window.rowMouseMove  = function(ev) { positionOrderTooltip(ev); };
     window.rowMouseLeave = function() { hideOrderTooltip(); };
+    window.rowClick = function(idx, ev) {
+        // Ignore clicks on toggle arrow (it has its own onclick)
+        if (ev.target.classList && ev.target.classList.contains('toggle')) return;
+        pinOrderTooltip(idx, ev);
+        ev.stopPropagation();
+    };
+    // Esc to unpin
+    document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape' && orderTooltipPinned) unpinOrderTooltip();
+    });
+    // Click outside the pinned tooltip → close it
+    document.addEventListener('mousedown', (e) => {
+        if (!orderTooltipPinned) return;
+        if (orderTooltipEl.contains(e.target)) return;
+        // Don't close if user clicked another row — that row's onclick will repin
+        const onRow = e.target.closest && e.target.closest('tr[data-idx]');
+        if (onRow) return;
+        unpinOrderTooltip();
+    });
 
     function renderSummary(s) {
         const tiles = [
@@ -712,7 +792,7 @@
         tbody.innerHTML = rows.map((r, i) => {
             const dir = r.direction ? r.direction.toLowerCase() : '';
             return `
-                <tr data-idx="${i}" onmouseenter="rowMouseEnter(${i}, event)" onmousemove="rowMouseMove(event)" onmouseleave="rowMouseLeave()">
+                <tr data-idx="${i}" onmouseenter="rowMouseEnter(${i}, event)" onmousemove="rowMouseMove(event)" onmouseleave="rowMouseLeave()" onclick="rowClick(${i}, event)">
                     <td><span class="toggle" onclick="toggleCtx(${i})">${r.signal_context ? '▸' : ''}</span></td>
                     <td>${fmtTime(r.timestamp)}</td>
                     <td><strong>${escapeHtml(r.pair || '')}</strong></td>
