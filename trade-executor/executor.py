@@ -570,9 +570,15 @@ async def journal(
         })
 
     # Also include MT5 orders that exist but were never logged locally
-    # (e.g. manual orders placed in MT5 terminal directly)
+    # (e.g. manual orders placed in MT5 terminal directly).
+    # Skip position-closing orders: when SL/TP/manual-close fires, MT5
+    # creates a fresh order whose position_id points back to the opener.
+    # Counting it again would double-book the same trade's profit.
     for o in mt5_orders:
         if o["ticket"] in seen_tickets:
+            continue
+        pos_id = o.get("position_id") or 0
+        if pos_id and pos_id != o["ticket"]:
             continue
         status, position_id = _outcome_from_order(o["ticket"])
         profit, close_price, close_time, in_deal = _profit_from_position(position_id)
