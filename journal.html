@@ -66,6 +66,57 @@
             min-width: 100px;
         }
         .filter-input:focus, .filter-select:focus { border-color: #2962ff; }
+
+        .status-hint {
+            position: relative;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            width: 14px;
+            height: 14px;
+            border-radius: 50%;
+            background: #2a2e39;
+            border: 1px solid #363a45;
+            color: #787b86;
+            font-size: 10px;
+            font-weight: 700;
+            margin-left: 5px;
+            cursor: help;
+        }
+        .status-hint:hover { color: #d1d4dc; border-color: #2962ff; }
+        .status-hint-popup {
+            display: none;
+            position: absolute;
+            bottom: calc(100% + 8px);
+            left: -8px;
+            background: #161a25;
+            border: 1px solid #2a2e39;
+            border-radius: 6px;
+            padding: 10px 14px;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+            font-size: 12px;
+            font-weight: 400;
+            color: #d1d4dc;
+            line-height: 1.75;
+            letter-spacing: normal;
+            z-index: 100;
+            white-space: nowrap;
+            box-shadow: 0 4px 16px rgba(0,0,0,0.5);
+            text-align: left;
+        }
+        .status-hint:hover .status-hint-popup { display: block; }
+        .status-hint-popup b { color: #fff; font-weight: 700; display: inline-block; min-width: 85px; }
+        .status-hint-popup .hint-divider {
+            margin: 6px 0;
+            border-top: 1px solid #2a2e39;
+        }
+        .status-hint-popup .hint-section-title {
+            color: #787b86;
+            font-size: 11px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin-bottom: 2px;
+        }
         .btn {
             background: #2962ff;
             color: #fff;
@@ -298,7 +349,7 @@
                 <input type="text" class="filter-input" id="pair" placeholder="EUR/USD или пусто">
             </div>
             <div class="filter-group">
-                <label class="filter-label">Статус</label>
+                <label class="filter-label">Статус<span class="status-hint">?<span class="status-hint-popup"><div class="hint-section-title">Жизненный цикл ордера</div><div><b>placed</b> — лимитник в MT5, ждёт цену</div><div><b>filled</b> — pending сработал, позиция открыта</div><div><b>closed</b> — позиция закрыта, есть финальный профит</div><div class="hint-divider"></div><div class="hint-section-title">Не дошло до сделки</div><div><b>cancelled</b> — pending сняли до срабатывания</div><div><b>expired</b> — pending протух по TTL</div><div><b>failed</b> — MT5 не принял ордер</div><div><b>rejected</b> — отклонён ещё до отправки в MT5</div><div><b>unknown</b> — лог говорит «размещено», MT5 не подтверждает</div></span></span></label>
                 <select class="filter-select" id="status">
                     <option value="">Все</option>
                     <option value="placed">Placed (активен)</option>
