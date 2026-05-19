@@ -67,7 +67,7 @@
         }
         .filter-input:focus, .filter-select:focus { border-color: #2962ff; }
 
-        .status-hint {
+        .filter-hint {
             position: relative;
             display: inline-flex;
             align-items: center;
@@ -83,8 +83,8 @@
             margin-left: 5px;
             cursor: help;
         }
-        .status-hint:hover { color: #d1d4dc; border-color: #2962ff; }
-        .status-hint-popup {
+        .filter-hint:hover { color: #d1d4dc; border-color: #2962ff; }
+        .filter-hint-popup {
             display: none;
             position: absolute;
             bottom: calc(100% + 8px);
@@ -100,17 +100,19 @@
             line-height: 1.75;
             letter-spacing: normal;
             z-index: 100;
-            white-space: nowrap;
+            max-width: 380px;
+            min-width: 260px;
             box-shadow: 0 4px 16px rgba(0,0,0,0.5);
             text-align: left;
         }
-        .status-hint:hover .status-hint-popup { display: block; }
-        .status-hint-popup b { color: #fff; font-weight: 700; display: inline-block; min-width: 85px; }
-        .status-hint-popup .hint-divider {
+        .filter-hint:hover .filter-hint-popup { display: block; }
+        .filter-hint-popup b { color: #fff; font-weight: 700; }
+        .filter-hint-popup > div { margin-bottom: 2px; }
+        .filter-hint-popup .hint-divider {
             margin: 6px 0;
             border-top: 1px solid #2a2e39;
         }
-        .status-hint-popup .hint-section-title {
+        .filter-hint-popup .hint-section-title {
             color: #787b86;
             font-size: 11px;
             text-transform: uppercase;
@@ -349,7 +351,7 @@
                 <input type="text" class="filter-input" id="pair" placeholder="EUR/USD или пусто">
             </div>
             <div class="filter-group">
-                <label class="filter-label">Статус<span class="status-hint">?<span class="status-hint-popup"><div class="hint-section-title">Жизненный цикл ордера</div><div><b>placed</b> — лимитник в MT5, ждёт цену</div><div><b>filled</b> — pending сработал, позиция открыта</div><div><b>closed</b> — позиция закрыта, есть финальный профит</div><div class="hint-divider"></div><div class="hint-section-title">Не дошло до сделки</div><div><b>cancelled</b> — pending сняли до срабатывания</div><div><b>expired</b> — pending протух по TTL</div><div><b>failed</b> — MT5 не принял ордер</div><div><b>rejected</b> — отклонён ещё до отправки в MT5</div><div><b>unknown</b> — лог говорит «размещено», MT5 не подтверждает</div></span></span></label>
+                <label class="filter-label">Статус<span class="filter-hint">?<span class="filter-hint-popup"><div class="hint-section-title">Жизненный цикл ордера</div><div><b>placed</b> — лимитник в MT5, ждёт цену</div><div><b>filled</b> — pending сработал, позиция открыта</div><div><b>closed</b> — позиция закрыта, есть финальный профит</div><div class="hint-divider"></div><div class="hint-section-title">Не дошло до сделки</div><div><b>cancelled</b> — pending сняли до срабатывания</div><div><b>expired</b> — pending протух по TTL</div><div><b>failed</b> — MT5 не принял ордер</div><div><b>rejected</b> — отклонён ещё до отправки в MT5</div><div><b>unknown</b> — лог говорит «размещено», MT5 не подтверждает</div></span></span></label>
                 <select class="filter-select" id="status">
                     <option value="">Все</option>
                     <option value="placed">Placed (активен)</option>
@@ -362,7 +364,7 @@
                 </select>
             </div>
             <div class="filter-group">
-                <label class="filter-label">Тип</label>
+                <label class="filter-label">Тип<span class="filter-hint">?<span class="filter-hint-popup"><div class="hint-section-title">Способ входа в сделку</div><div><b>pending</b> — лимитник (limit/stop): висит в MT5, ждёт пока цена коснётся entry. Сейчас сканер так и работает по умолчанию.</div><div><b>market</b> — рыночный ордер: открывается мгновенно по текущей цене, без ожидания.</div></span></span></label>
                 <select class="filter-select" id="kind">
                     <option value="">Все</option>
                     <option value="pending">Pending</option>
