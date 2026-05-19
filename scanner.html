@@ -297,6 +297,35 @@
         .pair-tooltip .tt-narrative.ok { border-left-color: #00e676; }
         .pair-tooltip .tt-narrative.no { border-left-color: #787b86; }
         .pair-tooltip .tt-narrative b { color: #fff; }
+        .pair-tooltip.pinned {
+            pointer-events: auto;
+            user-select: text;
+            border-color: #2962ff;
+        }
+        .pair-tooltip .tt-close {
+            position: absolute;
+            top: 6px;
+            right: 8px;
+            background: transparent;
+            border: none;
+            color: #787b86;
+            font-size: 16px;
+            cursor: pointer;
+            padding: 2px 6px;
+            line-height: 1;
+            display: none;
+        }
+        .pair-tooltip .tt-close:hover { color: #fff; }
+        .pair-tooltip.pinned .tt-close { display: block; }
+        .pair-tooltip .tt-hint {
+            margin-top: 8px;
+            padding-top: 6px;
+            border-top: 1px solid #2a2e39;
+            font-size: 10px;
+            color: #4a4d57;
+            text-align: center;
+        }
+        .pair-tooltip.pinned .tt-hint { color: #787b86; }
         .chart-btn {
             background: transparent;
             border: none;
@@ -1357,7 +1386,8 @@
             }
 
             const rowClass = hasValid ? (e.direction === 'up' ? ' signal-long' : ' signal-short') : '';
-            const clickAction = hasValid ? `onclick="toggleTradePlan('${pair}')"` : `onclick="openChart('${pair}')"`;
+            const baseAction = hasValid ? `toggleTradePlan('${pair}')` : `openChart('${pair}')`;
+            const clickAction = `onclick="pairRowClick('${pair}', event, function(){ ${baseAction}; })"`;
 
             let html = `<tr class="clickable${rowClass}" data-pair="${pair}" ${clickAction} onmouseenter="pairMouseEnter('${pair}', event)" onmousemove="pairMouseMove(event)" onmouseleave="pairMouseLeave()">
                 <td class="val">${scanningLabel}</td>
@@ -2601,17 +2631,30 @@
             return html;
         }
 
-        function showTooltip(pair, event) {
+        let tooltipPinned = false;
+
+        function renderTooltipFor(pair, pinned) {
             const r = pairResults[pair];
-            if (!r) return;
-            tooltip.innerHTML = buildTooltipHtml(pair, r);
+            if (!r) return false;
+            const close = `<button class="tt-close" onclick="unpinPairTooltip()" title="Закрыть">✕</button>`;
+            const hint = pinned
+                ? `<div class="tt-hint">Закреплено — выделите и скопируйте текст. Esc или ✕ — закрыть.</div>`
+                : `<div class="tt-hint">Shift+клик закрепит подсказку для копирования</div>`;
+            tooltip.innerHTML = close + buildTooltipHtml(pair, r) + hint;
+            return true;
+        }
+
+        function showTooltip(pair, event) {
+            if (tooltipPinned) return;
+            if (!renderTooltipFor(pair, false)) return;
+            tooltip.classList.remove('pinned');
             tooltip.style.display = 'block';
             tooltipVisible = true;
             positionTooltip(event);
         }
 
         function positionTooltip(event) {
-            if (!tooltipVisible) return;
+            if (!tooltipVisible || tooltipPinned) return;
             const pad = 16;
             let x = event.clientX + pad;
             let y = event.clientY + pad;
@@ -2625,13 +2668,51 @@
         }
 
         function hideTooltip() {
+            if (tooltipPinned) return;
             tooltip.style.display = 'none';
             tooltipVisible = false;
         }
 
+        function pinPairTooltip(pair, event) {
+            if (!renderTooltipFor(pair, true)) return;
+            tooltip.classList.add('pinned');
+            tooltip.style.display = 'block';
+            tooltipVisible = true;
+            tooltipPinned = false;        // temporarily allow positioning
+            positionTooltip({ clientX: event.clientX, clientY: event.clientY });
+            tooltipPinned = true;
+        }
+
+        window.unpinPairTooltip = function() {
+            tooltipPinned = false;
+            tooltip.classList.remove('pinned');
+            tooltip.style.display = 'none';
+            tooltipVisible = false;
+        };
+
         window.pairMouseEnter = function(pair, event) { showTooltip(pair, event); };
         window.pairMouseMove = function(event) { positionTooltip(event); };
         window.pairMouseLeave = function() { hideTooltip(); };
+        window.pairRowClick = function(pair, event, fallback) {
+            if (event.shiftKey) {
+                pinPairTooltip(pair, event);
+                event.preventDefault();
+                event.stopPropagation();
+                return;
+            }
+            if (typeof fallback === 'function') fallback();
+        };
+
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape' && tooltipPinned) unpinPairTooltip();
+        });
+        document.addEventListener('mousedown', (e) => {
+            if (!tooltipPinned) return;
+            if (tooltip.contains(e.target)) return;
+            const onRow = e.target.closest && e.target.closest('tr.clickable');
+            if (onRow && e.shiftKey) return;   // about to repin another row
+            unpinPairTooltip();
+        });
 
         // --- Open chart with pair ---
         window.openChart = function(pair, withAnalysis) {
