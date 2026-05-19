@@ -232,11 +232,23 @@
             color: #d1d4dc;
             z-index: 9999;
             pointer-events: none;
-            max-width: 380px;
-            min-width: 280px;
             box-shadow: 0 8px 24px rgba(0,0,0,0.5);
             line-height: 1.6;
         }
+        .pair-tooltip .tt-body {
+            display: flex;
+            gap: 18px;
+            align-items: flex-start;
+        }
+        .pair-tooltip .tt-col-left {
+            flex: 0 0 380px;
+            min-width: 0;
+        }
+        .pair-tooltip .tt-col-right {
+            flex: 0 0 340px;
+            min-width: 0;
+        }
+        .pair-tooltip .tt-col-right h4:first-child { margin-top: 0; }
         .pair-tooltip h4 {
             color: #787b86;
             font-size: 11px;
@@ -263,7 +275,6 @@
         .pair-tooltip .tt-ok { color: #00e676; }
         .pair-tooltip .tt-wait { color: #787b86; }
         .pair-tooltip .tt-warn { color: #ef5350; font-weight: 600; }
-        .pair-tooltip { max-width: 460px; }
         .pair-tooltip .tt-check {
             display: flex; align-items: flex-start; gap: 6px;
             margin: 3px 0; font-size: 11.5px; line-height: 1.4;
@@ -2501,6 +2512,7 @@
             const trendClass = r.trend === 'up' ? 'up' : r.trend === 'down' ? 'down' : 'neutral';
 
             let html = `<div class="tt-title">${pair}</div>`;
+            html += `<div class="tt-body"><div class="tt-col-left">`;
 
             // Step 1: Data
             html += `<h4>Данные</h4>`;
@@ -2573,14 +2585,18 @@
                 html += `<div class="tt-row"><span class="tt-label">R:R:</span> <span class="${r.entry.valid ? 'tt-ok' : 'tt-wait'}">1:${r.entry.rr.toFixed(1)}</span></div>`;
             }
 
-            // Step 7: Checklist + decision narrative
+            // Step 7: Checklist (left column) + decision narrative (right column)
             const dec = buildDecisionExplanation(r);
             html += `<h4>Чек-лист (8 правил)</h4>`;
             for (const item of dec.checklist) {
                 html += `<div class="tt-check"><span class="mark ${item.mark}">${markChar(item.mark)}</span><span class="txt">${item.text}</span></div>`;
             }
+
+            // Close left column, open right column with decision
+            html += `</div><div class="tt-col-right">`;
             html += `<h4>Решение</h4>`;
             html += `<div class="tt-narrative ${dec.verdict.kind}">${dec.verdict.text}</div>`;
+            html += `</div></div>`;
 
             return html;
         }
