@@ -2,6 +2,8 @@
 // Runs on schedule without browser, checks currency pairs and sends alerts
 
 const pendingConfig = require('./pending_config');
+const auth = require('./auth');
+auth.init();
 
 // ─── Configuration from environment variables ───
 const CONFIG = {
@@ -1308,6 +1310,7 @@ const apiServer = http.createServer(async (req, res) => {
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS');
     res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-Admin-Secret');
+    res.setHeader('Access-Control-Allow-Credentials', 'true');
     res.setHeader('Content-Type', 'application/json');
 
     if (req.method === 'OPTIONS') {
@@ -1320,6 +1323,57 @@ const apiServer = http.createServer(async (req, res) => {
     const p = parsed.pathname;
 
     try {
+        // ─── Auth ───
+        // Gate used by nginx auth_request: 204 if session valid, 401 otherwise.
+        if (p === '/api/auth/check' && req.method === 'GET') {
+            const session = auth.getSessionFromRequest(req);
+            if (session) { res.statusCode = 204; res.end(); return; }
+            return reply(res, 401, { ok: false });
+        }
+        if (p === '/api/auth/me' && req.method === 'GET') {
+            const session = auth.getSessionFromRequest(req);
+            if (!session) return reply(res, 401, { ok: false });
+            return reply(res, 200, { ok: true, user: { id: session.uid, email: session.email } });
+        }
+        if (p === '/api/auth/register' && req.method === 'POST') {
+            let body;
+            try { body = await jsonBody(req); }
+            catch { return reply(res, 400, { ok: false, error: 'bad JSON' }); }
+            const r = await auth.registerUser({ email: body.email, password: body.password, name: body.name });
+            return reply(res, r.ok ? 200 : 400, r);
+        }
+        if (p === '/api/auth/verify' && req.method === 'GET') {
+            const r = auth.verifyEmail({ token: parsed.query.token, email: parsed.query.email });
+            return reply(res, r.ok ? 200 : 400, r);
+        }
+        if (p === '/api/auth/login' && req.method === 'POST') {
+            let body;
+            try { body = await jsonBody(req); }
+            catch { return reply(res, 400, { ok: false, error: 'bad JSON' }); }
+            const r = auth.loginUser({ email: body.email, password: body.password });
+            if (!r.ok) return reply(res, 401, r);
+            auth.setSessionCookie(req, res, r.user);
+            return reply(res, 200, { ok: true, user: { id: r.user.id, email: r.user.email } });
+        }
+        if (p === '/api/auth/logout' && req.method === 'POST') {
+            auth.clearSessionCookie(req, res);
+            return reply(res, 200, { ok: true });
+        }
+        if (p === '/api/auth/reset/request' && req.method === 'POST') {
+            let body;
+            try { body = await jsonBody(req); }
+            catch { return reply(res, 400, { ok: false, error: 'bad JSON' }); }
+            const r = await auth.requestPasswordReset({ email: body.email });
+            return reply(res, 200, r);
+        }
+        if (p === '/api/auth/reset/apply' && req.method === 'POST') {
+            let body;
+            try { body = await jsonBody(req); }
+            catch { return reply(res, 400, { ok: false, error: 'bad JSON' }); }
+            const r = auth.applyPasswordReset({ token: body.token, password: body.password });
+            return reply(res, r.ok ? 200 : 400, r);
+        }
+
         if (p === '/api/balance') {
             if (!CONFIG.executorUrl || !CONFIG.executorSecret) {
                 return reply(res, 503, { success: false, error: 'Executor not configured' });

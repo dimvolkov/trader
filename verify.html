@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Подтверждение почты — Trader</title>
+    <style>
+        * { box-sizing: border-box; }
+        body { margin: 0; min-height: 100vh; display: flex; align-items: center; justify-content: center;
+            background: #131722; color: #d1d4dc;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; }
+        .card { background: #1e222d; border-radius: 12px; padding: 32px 28px; width: 100%; max-width: 380px;
+            box-shadow: 0 6px 24px rgba(0,0,0,0.35); text-align: center; }
+        h1 { margin: 0 0 10px; font-size: 22px; color: #fff; }
+        p  { margin: 0 0 18px; color: #787b86; font-size: 14px; line-height: 1.5; }
+        .ok h1  { color: #26a69a; }
+        .err h1 { color: #ef5350; }
+        a.btn { display: inline-block; padding: 10px 16px; background: #2962ff; color: #fff;
+            border-radius: 8px; font-size: 14px; font-weight: 600; text-decoration: none; }
+        a.btn:hover { background: #1e54e6; }
+    </style>
+</head>
+<body>
+    <div class="card" id="card">
+        <h1>Проверяем ссылку…</h1>
+        <p>Пожалуйста, подождите.</p>
+    </div>
+    <script>
+        const card = document.getElementById('card');
+        const params = new URLSearchParams(location.search);
+        const token = params.get('token');
+        const email = params.get('email');
+
+        function render(ok, title, text) {
+            card.className = ok ? 'card ok' : 'card err';
+            card.innerHTML = `<h1>${title}</h1><p>${text}</p>` +
+                `<a class="btn" href="/login.html">Перейти ко входу</a>`;
+        }
+
+        if (!token || !email) {
+            render(false, 'Неверная ссылка', 'В адресе отсутствует токен или email.');
+        } else {
+            const qs = `token=${encodeURIComponent(token)}&email=${encodeURIComponent(email)}`;
+            fetch(`/api/auth/verify?${qs}`)
+                .then(r => r.json().then(d => ({ ok: r.ok, data: d })))
+                .then(({ ok, data }) => {
+                    if (ok && data.ok) {
+                        render(true, 'Почта подтверждена', 'Теперь можно войти под вашим email и паролем.');
+                    } else {
+                        render(false, 'Ссылка недействительна', data.error || 'Не удалось подтвердить email.');
+                    }
+                })
+                .catch(() => render(false, 'Ошибка сети', 'Попробуйте обновить страницу.'));
+        }
+    </script>
+</body>
+</html>

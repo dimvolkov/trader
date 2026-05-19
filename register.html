@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Регистрация — Trader</title>
+    <style>
+        * { box-sizing: border-box; }
+        body { margin: 0; min-height: 100vh; display: flex; align-items: center; justify-content: center;
+            background: #131722; color: #d1d4dc;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; }
+        .card { background: #1e222d; border-radius: 12px; padding: 32px 28px; width: 100%; max-width: 380px;
+            box-shadow: 0 6px 24px rgba(0,0,0,0.35); }
+        h1 { margin: 0 0 6px; font-size: 22px; color: #fff; }
+        p.sub { margin: 0 0 22px; color: #787b86; font-size: 14px; }
+        label { display: block; font-size: 12px; color: #787b86; margin-bottom: 6px; }
+        input { width: 100%; padding: 11px 12px; background: #2a2e39; color: #d1d4dc;
+            border: 1px solid #2a2e39; border-radius: 8px; font-size: 14px; outline: none; }
+        input:focus { border-color: #2962ff; }
+        .field { margin-bottom: 14px; }
+        button { width: 100%; padding: 11px; background: #2962ff; color: #fff; border: 0; border-radius: 8px;
+            font-size: 14px; font-weight: 600; cursor: pointer; margin-top: 6px; }
+        button:hover { background: #1e54e6; }
+        button:disabled { opacity: 0.6; cursor: not-allowed; }
+        .links { margin-top: 18px; font-size: 13px; text-align: center; }
+        .links a { color: #2962ff; text-decoration: none; }
+        .links a:hover { text-decoration: underline; }
+        .msg { margin-top: 14px; padding: 10px 12px; border-radius: 8px; font-size: 13px; display: none; }
+        .msg.err { background: rgba(239,83,80,0.12); color: #ef5350; display: block; }
+        .msg.ok  { background: rgba(38,166,154,0.12); color: #26a69a; display: block; }
+        .done { text-align: center; padding: 8px 0 0; }
+        .done h2 { color: #fff; font-size: 18px; margin: 0 0 8px; }
+        .done p { color: #787b86; font-size: 14px; margin: 0 0 18px; }
+    </style>
+</head>
+<body>
+    <div class="card" id="container">
+        <form id="form" autocomplete="on">
+            <h1>Регистрация</h1>
+            <p class="sub">Создайте учётную запись. Подтвердите почту по ссылке из письма.</p>
+            <div class="field">
+                <label for="name">Имя (необязательно)</label>
+                <input id="name" name="name" type="text" autocomplete="name">
+            </div>
+            <div class="field">
+                <label for="email">Email</label>
+                <input id="email" name="email" type="email" required autocomplete="email">
+            </div>
+            <div class="field">
+                <label for="password">Пароль</label>
+                <input id="password" name="password" type="password" required minlength="8" autocomplete="new-password">
+            </div>
+            <button type="submit" id="submit">Создать учётную запись</button>
+            <div class="msg" id="msg"></div>
+            <div class="links">
+                Уже зарегистрированы? <a href="/login.html">Войти</a>
+            </div>
+        </form>
+    </div>
+    <script>
+        const form = document.getElementById('form');
+        const msg = document.getElementById('msg');
+        const submit = document.getElementById('submit');
+        const container = document.getElementById('container');
+
+        function showError(text) { msg.className = 'msg err'; msg.textContent = text; }
+
+        form.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            msg.className = 'msg'; msg.textContent = '';
+            submit.disabled = true;
+            try {
+                const res = await fetch('/api/auth/register', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        name: document.getElementById('name').value.trim() || undefined,
+                        email: document.getElementById('email').value.trim(),
+                        password: document.getElementById('password').value,
+                    }),
+                });
+                const data = await res.json().catch(() => ({}));
+                if (res.ok && data.ok) {
+                    container.innerHTML = `
+                        <div class="done">
+                            <h2>Проверьте почту</h2>
+                            <p>Мы отправили ссылку для подтверждения. Откройте письмо и перейдите по ссылке, чтобы активировать аккаунт.</p>
+                            <div class="links"><a href="/login.html">Перейти ко входу</a></div>
+                        </div>`;
+                    return;
+                }
+                showError(data.error || 'Не удалось зарегистрироваться');
+            } catch (err) {
+                showError('Ошибка сети');
+            } finally {
+                submit.disabled = false;
+            }
+        });
+    </script>
+</body>
+</html>

@@ -48,6 +48,22 @@ services:
       - CLAUDE_MODEL=${CLAUDE_MODEL:-claude-sonnet-4-6}
       # JSON-файл live-конфига отложенных ордеров
       - PENDING_CONFIG_FILE=/data/pending_config.json
+      # Auth (login/register/reset)
+      - AUTH_SECRET=${AUTH_SECRET:-please-change-me-to-a-long-random-string-please-change}
+      - APP_NAME=${APP_NAME:-Trader}
+      - APP_BASE_URL=${APP_BASE_URL:-https://trader.kachestvobiz-ai.ru}
+      - AUTH_USERS_FILE=/data/auth-users.json
+      # Тестовая учётка (создаётся при первом запуске, если в /data/auth-users.json её ещё нет)
+      - INITIAL_USER_EMAIL=${INITIAL_USER_EMAIL:-test@trader.local}
+      - INITIAL_USER_PASSWORD=${INITIAL_USER_PASSWORD:-trader12345}
+      - INITIAL_USER_NAME=${INITIAL_USER_NAME:-Test user}
+      # SMTP (если не задано — письма уходят в stdout, удобно для dev)
+      - SMTP_HOST=${SMTP_HOST:-}
+      - SMTP_PORT=${SMTP_PORT:-465}
+      - SMTP_SECURE=${SMTP_SECURE:-true}
+      - SMTP_USER=${SMTP_USER:-}
+      - SMTP_PASSWORD=${SMTP_PASSWORD:-}
+      - EMAIL_FROM=${EMAIL_FROM:-Trader <noreply@trader.kachestvobiz-ai.ru>}
     volumes:
       - scanner-data:/data
     networks:

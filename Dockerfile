@@ -7,4 +7,9 @@ COPY journal.html /usr/share/nginx/html/journal.html
 COPY strategy.html /usr/share/nginx/html/strategy.html
 COPY design-test.html /usr/share/nginx/html/design-test.html
 COPY lightweight-charts.js /usr/share/nginx/html/lightweight-charts.js
+COPY login.html /usr/share/nginx/html/login.html
+COPY register.html /usr/share/nginx/html/register.html
+COPY reset.html /usr/share/nginx/html/reset.html
+COPY reset-apply.html /usr/share/nginx/html/reset-apply.html
+COPY verify.html /usr/share/nginx/html/verify.html
 EXPOSE 3000
