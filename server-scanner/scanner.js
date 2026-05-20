@@ -47,6 +47,10 @@ const CONFIG = {
     executorSecret: process.env.EXECUTOR_API_SECRET || '', // shared secret
     autoTrade: process.env.AUTO_TRADE === 'true',          // enable auto-trading
 
+    // bybit-trader (Telegram crypto signals → ByBit USDT-perp)
+    bybitTraderUrl: process.env.BYBIT_TRADER_URL || '',           // e.g. http://bybit-trader:8502
+    bybitTraderSecret: process.env.BYBIT_EXECUTOR_SECRET || '',   // shared secret
+
     // Admin secret for /api/pending-config write endpoint (settings UI)
     adminSecret: process.env.SCANNER_ADMIN_SECRET || '',
 
@@ -1523,6 +1527,29 @@ async function proxyExecutor(req, res, path) {
     }
 }
 
+async function proxyBybitTrader(req, res, path) {
+    if (!CONFIG.bybitTraderUrl || !CONFIG.bybitTraderSecret) {
+        return reply(res, 503, { success: false, error: 'bybit-trader not configured' });
+    }
+    try {
+        const method = req.method;
+        const opts = {
+            method,
+            headers: { 'X-API-Secret': CONFIG.bybitTraderSecret },
+        };
+        if (method !== 'GET' && method !== 'DELETE') {
+            opts.headers['Content-Type'] = 'application/json';
+            const body = await jsonBody(req);
+            opts.body = JSON.stringify(body);
+        }
+        const r = await fetchWithTimeout(`${CONFIG.bybitTraderUrl}${path}`, opts);
+        const data = await r.json().catch(() => ({}));
+        return reply(res, r.status, data);
+    } catch (err) {
+        return reply(res, 502, { success: false, error: err.message });
+    }
+}
+
 const apiServer = http.createServer(async (req, res) => {
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS');
@@ -1671,6 +1698,61 @@ const apiServer = http.createServer(async (req, res) => {
             if (!requireAdmin(req)) return reply(res, 401, { success: false, error: 'admin secret required' });
             const qs = parsed.search || '';
             return proxyExecutor(req, res, `/journal${qs}`);
+        }
+
+        // ─── bybit-trader proxies (Telegram crypto signals → ByBit) ───
+        if (p === '/api/crypto/account' && req.method === 'GET') {
+            if (!requireAdmin(req)) return reply(res, 401, { success: false, error: 'admin secret required' });
+            return proxyBybitTrader(req, res, '/account');
+        }
+        if (p === '/api/crypto/positions' && req.method === 'GET') {
+            if (!requireAdmin(req)) return reply(res, 401, { success: false, error: 'admin secret required' });
+            return proxyBybitTrader(req, res, '/positions');
+        }
+        if (p === '/api/crypto/signals' && req.method === 'GET') {
+            if (!requireAdmin(req)) return reply(res, 401, { success: false, error: 'admin secret required' });
+            const qs = parsed.search || '';
+            return proxyBybitTrader(req, res, `/signals${qs}`);
+        }
+        if (p === '/api/crypto/history' && req.method === 'GET') {
+            if (!requireAdmin(req)) return reply(res, 401, { success: false, error: 'admin secret required' });
+            const qs = parsed.search || '';
+            return proxyBybitTrader(req, res, `/history${qs}`);
+        }
+        if (p === '/api/crypto/closed-pnl' && req.method === 'GET') {
+            if (!requireAdmin(req)) return reply(res, 401, { success: false, error: 'admin secret required' });
+            const qs = parsed.search || '';
+            return proxyBybitTrader(req, res, `/closed-pnl${qs}`);
+        }
+        if (p === '/api/crypto/order' && req.method === 'POST') {
+            if (!requireAdmin(req)) return reply(res, 401, { success: false, error: 'admin secret required' });
+            return proxyBybitTrader(req, res, '/order');
+        }
+        if (p.startsWith('/api/crypto/close/') && req.method === 'POST') {
+            if (!requireAdmin(req)) return reply(res, 401, { success: false, error: 'admin secret required' });
+            const pair = encodeURIComponent(p.slice('/api/crypto/close/'.length));
+            return proxyBybitTrader(req, res, `/close/${pair}`);
+        }
+        if (p === '/api/crypto/config' && req.method === 'GET') {
+            if (!requireAdmin(req)) return reply(res, 401, { success: false, error: 'admin secret required' });
+            return proxyBybitTrader(req, res, '/config');
+        }
+        if (p === '/api/crypto/config' && req.method === 'POST') {
+            if (!requireAdmin(req)) return reply(res, 401, { success: false, error: 'admin secret required' });
+            return proxyBybitTrader(req, res, '/config');
+        }
+        if (p === '/api/crypto/channels' && req.method === 'GET') {
+            if (!requireAdmin(req)) return reply(res, 401, { success: false, error: 'admin secret required' });
+            return proxyBybitTrader(req, res, '/channels');
+        }
+        if (p === '/api/crypto/channels' && req.method === 'POST') {
+            if (!requireAdmin(req)) return reply(res, 401, { success: false, error: 'admin secret required' });
+            return proxyBybitTrader(req, res, '/channels');
+        }
+        if (p.startsWith('/api/crypto/channels/') && req.method === 'DELETE') {
+            if (!requireAdmin(req)) return reply(res, 401, { success: false, error: 'admin secret required' });
+            const ch = encodeURIComponent(p.slice('/api/crypto/channels/'.length));
+            return proxyBybitTrader(req, res, `/channels/${ch}`);
         }
 
         // ─── Scan state (UI sync with server scanner) ───

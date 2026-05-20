@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+.pytest_cache/
+telethon.session
+telethon.session-journal
+*.jsonl
+crypto_config.json

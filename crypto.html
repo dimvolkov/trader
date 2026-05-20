@@ -1,0 +1,573 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Crypto / ByBit — Telegram signals</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            background: #131722;
+            color: #d1d4dc;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            min-height: 100vh;
+        }
+        .header {
+            display: flex; align-items: center; justify-content: space-between;
+            padding: 12px 20px;
+            background: #1e222d;
+            border-bottom: 1px solid #2a2e39;
+        }
+        .header-left { display: flex; align-items: center; gap: 16px; }
+        .header-left h1 { font-size: 18px; font-weight: 700; color: #fff; }
+        .header-left a { color: #2962ff; text-decoration: none; font-size: 13px; }
+        .header-left a:hover { text-decoration: underline; }
+        .testnet-badge {
+            font-size: 11px; padding: 2px 8px; border-radius: 10px;
+            font-weight: 600;
+            background: rgba(255, 167, 38, 0.2); color: #ffa726;
+        }
+        .mainnet-badge {
+            background: rgba(38, 166, 154, 0.2); color: #26a69a;
+        }
+        .content {
+            max-width: 1100px; margin: 0 auto; padding: 24px 20px; width: 100%;
+        }
+        .section { margin-bottom: 24px; }
+        .section h2 {
+            font-size: 14px; color: #787b86;
+            text-transform: uppercase; letter-spacing: 0.5px;
+            margin-bottom: 12px;
+        }
+        .card {
+            background: #1e222d;
+            border: 1px solid #2a2e39;
+            border-radius: 8px;
+            padding: 16px;
+            margin-bottom: 12px;
+        }
+        .grid { display: grid; gap: 8px; }
+        .grid-3 { grid-template-columns: repeat(3, 1fr); }
+        .grid-4 { grid-template-columns: repeat(4, 1fr); }
+        .kv { display: flex; flex-direction: column; gap: 2px; }
+        .kv-label { font-size: 11px; color: #787b86; text-transform: uppercase; letter-spacing: 0.5px; }
+        .kv-value { font-size: 16px; font-weight: 700; color: #fff; font-family: monospace; }
+        .kv-value.up { color: #26a69a; }
+        .kv-value.down { color: #ef5350; }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 13px;
+        }
+        th, td {
+            padding: 8px 10px;
+            text-align: left;
+            border-bottom: 1px solid #2a2e39;
+            white-space: nowrap;
+        }
+        th {
+            font-size: 11px; color: #787b86; font-weight: 600;
+            text-transform: uppercase; letter-spacing: 0.5px;
+        }
+        td.mono { font-family: monospace; }
+        td.right { text-align: right; }
+        .badge {
+            font-size: 11px; padding: 2px 8px; border-radius: 10px;
+            font-weight: 600;
+        }
+        .badge-buy { background: rgba(38, 166, 154, 0.2); color: #26a69a; }
+        .badge-sell { background: rgba(239, 83, 80, 0.2); color: #ef5350; }
+        .badge-skip { background: rgba(120, 123, 134, 0.2); color: #787b86; }
+        .badge-exec { background: rgba(41, 98, 255, 0.2); color: #2962ff; }
+        .badge-fail { background: rgba(239, 83, 80, 0.2); color: #ef5350; }
+        .badge-parsed { background: rgba(255, 167, 38, 0.2); color: #ffa726; }
+        button {
+            background: #2962ff; color: #fff; border: none; padding: 8px 14px;
+            border-radius: 4px; cursor: pointer; font-size: 13px; font-weight: 600;
+        }
+        button:hover { background: #1e53e5; }
+        button.danger { background: #c62828; }
+        button.danger:hover { background: #a71d1d; }
+        button.ghost { background: transparent; border: 1px solid #363a45; color: #d1d4dc; }
+        button.ghost:hover { background: #2a2e39; }
+        input, select {
+            background: #2a2e39; color: #fff; border: 1px solid #363a45;
+            padding: 8px 12px; border-radius: 4px; font-size: 13px;
+        }
+        input[type="checkbox"] { width: 16px; height: 16px; }
+        .form-row {
+            display: grid; grid-template-columns: 220px 1fr;
+            gap: 12px; padding: 8px 0; align-items: center;
+        }
+        .form-row label { font-size: 13px; color: #d1d4dc; }
+        .signal-text {
+            background: #131722;
+            padding: 6px 8px;
+            border-radius: 4px;
+            font-family: monospace;
+            font-size: 12px;
+            color: #d1d4dc;
+            max-height: 60px;
+            overflow-y: auto;
+            white-space: pre-wrap;
+            margin-top: 4px;
+        }
+        .result {
+            font-size: 13px; min-height: 20px; margin-top: 8px;
+        }
+        .ok { color: #26a69a; }
+        .fail { color: #ef5350; }
+        .loading { color: #787b86; }
+        details { margin-top: 12px; }
+        summary {
+            cursor: pointer; font-size: 14px; color: #fff; font-weight: 600;
+            padding: 8px 0;
+        }
+        .channel-pill {
+            display: inline-flex; align-items: center; gap: 6px;
+            background: #2a2e39; padding: 4px 10px;
+            border-radius: 12px; font-size: 12px; margin: 4px 4px 0 0;
+        }
+        .channel-pill button {
+            background: transparent; color: #ef5350; padding: 0;
+            font-size: 14px; line-height: 1; border: none;
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <div class="header-left">
+            <h1>Crypto / ByBit <span id="envBadge" class="testnet-badge">…</span></h1>
+            <a href="/index.html">← Главная</a>
+            <a href="/scanner.html">Сканер</a>
+            <a href="/journal.html">Журнал MT5</a>
+            <a href="/settings.html">Настройки</a>
+        </div>
+        <button class="ghost" onclick="refreshAll()">Обновить</button>
+    </div>
+
+    <div class="content">
+        <!-- Admin secret -->
+        <div class="section">
+            <h2>Админ-секрет</h2>
+            <div class="card">
+                <div class="form-row">
+                    <label>X-Admin-Secret</label>
+                    <div style="display:flex; gap:8px;">
+                        <input id="adminSecret" type="password" placeholder="из ENV SCANNER_ADMIN_SECRET" style="flex:1">
+                        <button onclick="saveAdmin()">Сохранить</button>
+                    </div>
+                </div>
+                <div id="adminResult" class="result"></div>
+            </div>
+        </div>
+
+        <!-- Account -->
+        <div class="section">
+            <h2>Счёт ByBit</h2>
+            <div class="card">
+                <div class="grid grid-4" id="accountGrid">
+                    <div class="kv"><span class="kv-label">Equity USDT</span><span class="kv-value" id="acc_equity">—</span></div>
+                    <div class="kv"><span class="kv-label">Wallet USDT</span><span class="kv-value" id="acc_wallet">—</span></div>
+                    <div class="kv"><span class="kv-label">Available USDT</span><span class="kv-value" id="acc_avail">—</span></div>
+                    <div class="kv"><span class="kv-label">Total equity (acct)</span><span class="kv-value" id="acc_total">—</span></div>
+                </div>
+                <div id="accountResult" class="result"></div>
+            </div>
+        </div>
+
+        <!-- Open positions -->
+        <div class="section">
+            <h2>Открытые позиции</h2>
+            <div class="card">
+                <table>
+                    <thead><tr>
+                        <th>Pair</th><th>Side</th><th class="right">Qty</th>
+                        <th class="right">Entry</th><th class="right">Mark</th>
+                        <th class="right">SL</th><th class="right">TP</th>
+                        <th class="right">uPnL</th><th>Действие</th>
+                    </tr></thead>
+                    <tbody id="positionsBody"><tr><td colspan="9" class="loading">Загрузка…</td></tr></tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- Signals feed -->
+        <div class="section">
+            <h2>Лента сигналов <span id="parserStats" style="font-size:12px;color:#787b86;font-weight:400;text-transform:none;letter-spacing:0;"></span></h2>
+            <div class="card">
+                <table>
+                    <thead><tr>
+                        <th>Время</th><th>Канал</th><th>Статус</th><th>Парс</th>
+                        <th>Pair</th><th>Dir</th><th>Текст / Причина</th>
+                    </tr></thead>
+                    <tbody id="signalsBody"><tr><td colspan="7" class="loading">Загрузка…</td></tr></tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- Trades history -->
+        <div class="section">
+            <h2>Журнал сделок</h2>
+            <div class="card">
+                <table>
+                    <thead><tr>
+                        <th>Время</th><th>Action</th><th>Pair</th>
+                        <th>Dir</th><th class="right">Qty</th>
+                        <th class="right">Entry</th><th class="right">SL</th>
+                        <th>Result</th>
+                    </tr></thead>
+                    <tbody id="tradesBody"><tr><td colspan="8" class="loading">Загрузка…</td></tr></tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- Closed PnL -->
+        <div class="section">
+            <h2>Закрытые сделки (ByBit)</h2>
+            <div class="card">
+                <table>
+                    <thead><tr>
+                        <th>Время</th><th>Pair</th><th>Side</th>
+                        <th class="right">Qty</th><th class="right">Entry</th>
+                        <th class="right">Exit</th><th class="right">PnL</th>
+                    </tr></thead>
+                    <tbody id="closedBody"><tr><td colspan="7" class="loading">Загрузка…</td></tr></tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- Channels whitelist -->
+        <details>
+            <summary>Telegram-каналы (white-list)</summary>
+            <div class="card" style="margin-top:8px">
+                <div style="display:flex;gap:8px;margin-bottom:8px">
+                    <input id="newChannel" type="text" placeholder="@channel_name или -100123456789" style="flex:1">
+                    <button onclick="addChannel()">Добавить</button>
+                </div>
+                <div id="channelsList">—</div>
+                <div id="channelResult" class="result"></div>
+            </div>
+        </details>
+
+        <!-- Settings -->
+        <details>
+            <summary>Настройки исполнения</summary>
+            <div class="card" style="margin-top:8px">
+                <div class="form-row">
+                    <label>auto_trade</label>
+                    <input id="cfg_auto_trade" type="checkbox">
+                </div>
+                <div class="form-row">
+                    <label>testnet</label>
+                    <input id="cfg_testnet" type="checkbox">
+                </div>
+                <div class="form-row">
+                    <label>risk_pct (0..0.2)</label>
+                    <input id="cfg_risk_pct" type="number" step="0.001" min="0" max="0.2">
+                </div>
+                <div class="form-row">
+                    <label>leverage (1..100)</label>
+                    <input id="cfg_leverage" type="number" step="1" min="1" max="100">
+                </div>
+                <div class="form-row">
+                    <label>max_open_positions</label>
+                    <input id="cfg_max_open_positions" type="number" step="1" min="1" max="50">
+                </div>
+                <div class="form-row">
+                    <label>min_position_usd</label>
+                    <input id="cfg_min_position_usd" type="number" step="1" min="1">
+                </div>
+                <div class="form-row">
+                    <label>max_position_usd</label>
+                    <input id="cfg_max_position_usd" type="number" step="1" min="1">
+                </div>
+                <div class="form-row">
+                    <label>default_tp_rr</label>
+                    <input id="cfg_default_tp_rr" type="number" step="0.1" min="0.5" max="10">
+                </div>
+                <div class="form-row">
+                    <label>max_entry_drift_pct</label>
+                    <input id="cfg_max_entry_drift_pct" type="number" step="0.05" min="0" max="1">
+                </div>
+                <div class="form-row">
+                    <label>pair_whitelist (через запятую)</label>
+                    <input id="cfg_pair_whitelist" type="text">
+                </div>
+                <div class="form-row">
+                    <label>pair_blacklist (через запятую)</label>
+                    <input id="cfg_pair_blacklist" type="text">
+                </div>
+                <div style="margin-top:12px">
+                    <button onclick="saveConfig()">Сохранить</button>
+                    <button class="ghost" onclick="loadConfig()">Перечитать</button>
+                </div>
+                <div id="configResult" class="result"></div>
+            </div>
+        </details>
+    </div>
+
+<script>
+function getAdmin() {
+    return localStorage.getItem('scannerAdminSecret') || '';
+}
+function saveAdmin() {
+    const v = document.getElementById('adminSecret').value.trim();
+    localStorage.setItem('scannerAdminSecret', v);
+    show('adminResult', 'Сохранено локально', 'ok');
+    refreshAll();
+}
+function show(id, msg, kind) {
+    const el = document.getElementById(id);
+    el.className = 'result ' + (kind || '');
+    el.textContent = msg;
+}
+async function api(path, opts) {
+    opts = opts || {};
+    opts.headers = opts.headers || {};
+    opts.headers['X-Admin-Secret'] = getAdmin();
+    const r = await fetch(path, opts);
+    return r.json().catch(() => ({ success: false, error: 'bad JSON' }));
+}
+function fmtNum(v, digits) {
+    if (v === null || v === undefined || isNaN(v)) return '—';
+    return Number(v).toLocaleString('en-US', { minimumFractionDigits: digits || 0, maximumFractionDigits: digits || 2 });
+}
+function fmtTime(iso) {
+    if (!iso) return '—';
+    try { return new Date(iso).toLocaleString('ru-RU'); } catch { return iso; }
+}
+
+async function loadAccount() {
+    const r = await api('/api/crypto/account');
+    if (!r.success) { show('accountResult', 'Не удалось: ' + (r.error || 'no data'), 'fail'); return; }
+    document.getElementById('acc_equity').textContent = fmtNum(r.usdtEquity, 2);
+    document.getElementById('acc_wallet').textContent = fmtNum(r.usdtWallet, 2);
+    document.getElementById('acc_avail').textContent = fmtNum(r.usdtAvailable, 2);
+    document.getElementById('acc_total').textContent = fmtNum(r.totalEquity, 2);
+    show('accountResult', '', '');
+}
+
+async function loadPositions() {
+    const r = await api('/api/crypto/positions');
+    const tbody = document.getElementById('positionsBody');
+    if (!r.success) {
+        tbody.innerHTML = `<tr><td colspan="9" class="fail">${r.error || 'нет данных'}</td></tr>`;
+        return;
+    }
+    const positions = r.positions || [];
+    if (!positions.length) { tbody.innerHTML = '<tr><td colspan="9" class="loading">Открытых позиций нет</td></tr>'; return; }
+    tbody.innerHTML = positions.map(p => {
+        const pnlCls = p.unrealisedPnl >= 0 ? 'up' : 'down';
+        const sideCls = p.side === 'Buy' ? 'badge-buy' : 'badge-sell';
+        return `<tr>
+            <td class="mono">${p.symbol}</td>
+            <td><span class="badge ${sideCls}">${p.side}</span></td>
+            <td class="right mono">${fmtNum(p.size, 4)}</td>
+            <td class="right mono">${fmtNum(p.avgPrice, 4)}</td>
+            <td class="right mono">${fmtNum(p.markPrice, 4)}</td>
+            <td class="right mono">${p.stopLoss ? fmtNum(p.stopLoss, 4) : '—'}</td>
+            <td class="right mono">${p.takeProfit ? fmtNum(p.takeProfit, 4) : '—'}</td>
+            <td class="right mono ${pnlCls}">${fmtNum(p.unrealisedPnl, 2)}</td>
+            <td><button class="danger" onclick="closePosition('${p.symbol}')">Close</button></td>
+        </tr>`;
+    }).join('');
+}
+
+async function closePosition(pair) {
+    if (!confirm(`Закрыть позицию ${pair} рынком?`)) return;
+    const r = await api('/api/crypto/close/' + encodeURIComponent(pair), { method: 'POST' });
+    alert(r.success ? `OK: ${JSON.stringify(r)}` : 'FAIL: ' + (r.error || JSON.stringify(r)));
+    refreshAll();
+}
+
+async function loadSignals() {
+    const r = await api('/api/crypto/signals?days=14&limit=100');
+    const tbody = document.getElementById('signalsBody');
+    if (!r.success) {
+        tbody.innerHTML = `<tr><td colspan="7" class="fail">${r.error || 'нет данных'}</td></tr>`;
+        return;
+    }
+    const stats = r.parser_stats || {};
+    document.getElementById('parserStats').textContent =
+        ` · regex ${stats.regex_hits || 0} / llm ${stats.llm_hits || 0} (${((stats.llm_share || 0) * 100).toFixed(0)}%) / skipped ${stats.skipped || 0}`;
+    const sigs = (r.signals || []).slice().reverse();
+    if (!sigs.length) { tbody.innerHTML = '<tr><td colspan="7" class="loading">Сигналов нет</td></tr>'; return; }
+    tbody.innerHTML = sigs.map(s => {
+        const parsed = s.parsed || {};
+        const statusCls = ({
+            executed: 'badge-exec', execution_failed: 'badge-fail',
+            parsed: 'badge-parsed', skipped: 'badge-skip',
+            unparsed: 'badge-skip', ignored_channel: 'badge-skip',
+            pipeline_error: 'badge-fail', failed: 'badge-fail',
+        })[s.status] || 'badge-skip';
+        const sideCls = parsed.direction === 'Buy' ? 'badge-buy'
+                      : parsed.direction === 'Sell' ? 'badge-sell' : '';
+        const reason = s.skip_reason || s.failure_reason
+                       || (s.execution && s.execution.error)
+                       || (s.text || '').slice(0, 200);
+        const channel = s.chat_username ? '@' + s.chat_username : (s.chat_id || '—');
+        return `<tr>
+            <td>${fmtTime(s.timestamp)}</td>
+            <td class="mono">${channel}</td>
+            <td><span class="badge ${statusCls}">${s.status}</span></td>
+            <td>${parsed.confidence || '—'}</td>
+            <td class="mono">${parsed.pair || '—'}</td>
+            <td>${parsed.direction ? `<span class="badge ${sideCls}">${parsed.direction}</span>` : '—'}</td>
+            <td><div class="signal-text">${escapeHtml(reason)}</div></td>
+        </tr>`;
+    }).join('');
+}
+
+async function loadTrades() {
+    const r = await api('/api/crypto/history?days=30&limit=100');
+    const tbody = document.getElementById('tradesBody');
+    if (!r.success) {
+        tbody.innerHTML = `<tr><td colspan="8" class="fail">${r.error || 'нет данных'}</td></tr>`;
+        return;
+    }
+    const trades = (r.trades || []).slice().reverse();
+    if (!trades.length) { tbody.innerHTML = '<tr><td colspan="8" class="loading">Сделок нет</td></tr>'; return; }
+    tbody.innerHTML = trades.map(t => {
+        const result = t.result || {};
+        const ok = result.success !== false;
+        return `<tr>
+            <td>${fmtTime(t.timestamp)}</td>
+            <td>${t.action || '—'}</td>
+            <td class="mono">${t.pair || '—'}</td>
+            <td>${t.direction || '—'}</td>
+            <td class="right mono">${fmtNum(t.qty, 4)}</td>
+            <td class="right mono">${fmtNum(t.entry, 4)}</td>
+            <td class="right mono">${fmtNum(t.stop, 4)}</td>
+            <td class="${ok ? 'ok' : 'fail'}">${ok ? (result.orderId || 'OK') : (result.error || 'fail')}</td>
+        </tr>`;
+    }).join('');
+}
+
+async function loadClosed() {
+    const r = await api('/api/crypto/closed-pnl?limit=50');
+    const tbody = document.getElementById('closedBody');
+    if (!r.success) {
+        tbody.innerHTML = `<tr><td colspan="7" class="fail">${r.error || 'нет данных'}</td></tr>`;
+        return;
+    }
+    const ts = r.trades || [];
+    if (!ts.length) { tbody.innerHTML = '<tr><td colspan="7" class="loading">Закрытых сделок нет</td></tr>'; return; }
+    tbody.innerHTML = ts.map(t => {
+        const pnlCls = t.closedPnl >= 0 ? 'up' : 'down';
+        return `<tr>
+            <td>${fmtTime(Number(t.updatedTime || t.createdTime))}</td>
+            <td class="mono">${t.symbol}</td>
+            <td>${t.side}</td>
+            <td class="right mono">${fmtNum(t.qty, 4)}</td>
+            <td class="right mono">${fmtNum(t.avgEntryPrice, 4)}</td>
+            <td class="right mono">${fmtNum(t.avgExitPrice, 4)}</td>
+            <td class="right mono ${pnlCls}">${fmtNum(t.closedPnl, 2)}</td>
+        </tr>`;
+    }).join('');
+}
+
+async function loadChannels() {
+    const r = await api('/api/crypto/channels');
+    const list = document.getElementById('channelsList');
+    if (!r.success) { list.innerHTML = '<span class="fail">' + (r.error || 'нет данных') + '</span>'; return; }
+    const items = r.channels || [];
+    if (!items.length) { list.innerHTML = '<span class="loading">Каналы не добавлены — приём сигналов выключен</span>'; return; }
+    list.innerHTML = items.map(c => `
+        <span class="channel-pill">${c}
+        <button title="Удалить" onclick="removeChannel('${String(c).replace(/'/g, "\\'")}')">×</button>
+        </span>`).join('');
+}
+
+async function addChannel() {
+    const raw = document.getElementById('newChannel').value.trim();
+    if (!raw) return;
+    const channel = /^-?\d+$/.test(raw) ? Number(raw) : raw;
+    const r = await api('/api/crypto/channels', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ channel }),
+    });
+    if (r.success) {
+        show('channelResult', 'Добавлен: ' + raw, 'ok');
+        document.getElementById('newChannel').value = '';
+        loadChannels();
+    } else {
+        show('channelResult', 'Ошибка: ' + (r.error || 'fail'), 'fail');
+    }
+}
+
+async function removeChannel(ch) {
+    if (!confirm('Удалить ' + ch + '?')) return;
+    const r = await api('/api/crypto/channels/' + encodeURIComponent(ch), { method: 'DELETE' });
+    if (r.success) { loadChannels(); show('channelResult', 'Удалён', 'ok'); }
+    else show('channelResult', 'Ошибка: ' + (r.error || 'fail'), 'fail');
+}
+
+const CFG_BOOL = ['auto_trade', 'testnet'];
+const CFG_NUM = ['risk_pct', 'leverage', 'max_open_positions',
+    'min_position_usd', 'max_position_usd', 'default_tp_rr', 'max_entry_drift_pct'];
+const CFG_LIST = ['pair_whitelist', 'pair_blacklist'];
+
+async function loadConfig() {
+    const r = await api('/api/crypto/config');
+    if (!r.success) { show('configResult', 'Ошибка: ' + (r.error || 'no data'), 'fail'); return; }
+    const cfg = r.config || {};
+    document.getElementById('envBadge').className = cfg.testnet ? 'testnet-badge' : 'testnet-badge mainnet-badge';
+    document.getElementById('envBadge').textContent = cfg.testnet ? 'TESTNET' : 'MAINNET';
+    for (const k of CFG_BOOL) {
+        const el = document.getElementById('cfg_' + k);
+        if (el) el.checked = !!cfg[k];
+    }
+    for (const k of CFG_NUM) {
+        const el = document.getElementById('cfg_' + k);
+        if (el) el.value = cfg[k] != null ? cfg[k] : '';
+    }
+    for (const k of CFG_LIST) {
+        const el = document.getElementById('cfg_' + k);
+        if (el) el.value = (cfg[k] || []).join(', ');
+    }
+    show('configResult', 'Конфиг загружен', 'ok');
+}
+
+async function saveConfig() {
+    const patch = {};
+    for (const k of CFG_BOOL) patch[k] = document.getElementById('cfg_' + k).checked;
+    for (const k of CFG_NUM) {
+        const v = parseFloat(document.getElementById('cfg_' + k).value);
+        if (!isNaN(v)) patch[k] = v;
+    }
+    for (const k of CFG_LIST) {
+        const v = document.getElementById('cfg_' + k).value.trim();
+        patch[k] = v ? v.split(/[,\s]+/).filter(Boolean) : [];
+    }
+    const r = await api('/api/crypto/config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ patch }),
+    });
+    if (r.success) show('configResult', 'Сохранено', 'ok');
+    else show('configResult', 'Ошибка: ' + (r.error || JSON.stringify(r)), 'fail');
+}
+
+function escapeHtml(s) {
+    return String(s || '').replace(/[&<>"']/g, c => ({
+        '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'
+    })[c]);
+}
+
+async function refreshAll() {
+    await Promise.all([
+        loadAccount(), loadPositions(), loadSignals(),
+        loadTrades(), loadClosed(), loadChannels(), loadConfig(),
+    ]);
+}
+
+(function init() {
+    document.getElementById('adminSecret').value = getAdmin();
+    refreshAll();
+    setInterval(refreshAll, 15000);
+})();
+</script>
+</body>
+</html>

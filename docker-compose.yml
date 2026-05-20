@@ -41,6 +41,9 @@ services:
       - EXECUTOR_URL=${EXECUTOR_URL:-}
       - EXECUTOR_API_SECRET=${EXECUTOR_API_SECRET:-}
       - AUTO_TRADE=${AUTO_TRADE:-false}
+      # bybit-trader (Telegram crypto signals → ByBit USDT-perp)
+      - BYBIT_TRADER_URL=${BYBIT_TRADER_URL:-http://bybit-trader:8502}
+      - BYBIT_EXECUTOR_SECRET=${BYBIT_EXECUTOR_SECRET:-}
       # Admin secret для /api/pending-config (UI настроек pending)
       - SCANNER_ADMIN_SECRET=${SCANNER_ADMIN_SECRET:-}
       # Anthropic Claude (чат-ассистент на странице стратегии)
@@ -73,9 +76,43 @@ services:
     networks:
       - dokploy-network
 
+  bybit-trader:
+    build: ./bybit-trader
+    restart: unless-stopped
+    expose:
+      - "8502"
+    environment:
+      # ByBit V5 API
+      - BYBIT_API_KEY=${BYBIT_API_KEY:-}
+      - BYBIT_API_SECRET=${BYBIT_API_SECRET:-}
+      - BYBIT_TESTNET=${BYBIT_TESTNET:-true}
+      # Override host if api.bybit.com gets blocked (defaults to testnet/mainnet by flag)
+      - BYBIT_API_HOST=${BYBIT_API_HOST:-}
+      # Auth secret shared with scanner (scanner uses BYBIT_EXECUTOR_SECRET to call us)
+      - BYBIT_EXECUTOR_SECRET=${BYBIT_EXECUTOR_SECRET:-}
+      # Telethon (MTProto user-account for reading channels)
+      - TELETHON_API_ID=${TELETHON_API_ID:-}
+      - TELETHON_API_HASH=${TELETHON_API_HASH:-}
+      - TELETHON_SESSION=/data/telethon.session
+      # Admin Telegram notifications (open/close/fail events)
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN:-}
+      - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID:-}
+      # LLM fallback parser (uses the same Anthropic key as the strategy chat)
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - CLAUDE_MODEL=${CLAUDE_MODEL:-claude-sonnet-4-6}
+      # State files
+      - CRYPTO_CONFIG_FILE=/data/crypto_config.json
+      - SIGNAL_LOG=/data/signals.jsonl
+      - TRADE_LOG=/data/trades.jsonl
+    volumes:
+      - crypto-data:/data
+    networks:
+      - dokploy-network
+
 networks:
   dokploy-network:
     external: true
 
 volumes:
   scanner-data:
+  crypto-data:
