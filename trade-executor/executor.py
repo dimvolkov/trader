@@ -469,10 +469,23 @@ async def journal(
     symbol = pair_to_mt5_symbol(pair) if pair else None
     mt5_orders = mt5_bridge.get_history_orders(from_ts, symbol=symbol).get("orders", [])
     mt5_deals = mt5_bridge.get_history_deals(from_ts, symbol=symbol).get("deals", [])
+    active_orders = mt5_bridge.get_pending_orders(symbol=symbol).get("orders", [])
     log_recs = read_trade_log(days=days, pair=pair)
 
-    # Index MT5 data by ticket / position_id
+    # Index MT5 data by ticket / position_id. History only contains finished orders,
+    # so active pendings (still waiting for price) must be merged in explicitly,
+    # otherwise _outcome_from_order returns "unknown" and they get hidden by the
+    # journal status filter.
     orders_by_ticket = {o["ticket"]: o for o in mt5_orders}
+    for o in active_orders:
+        if o["ticket"] in orders_by_ticket:
+            continue
+        orders_by_ticket[o["ticket"]] = {
+            **o,
+            "state": 1,                       # ORDER_STATE_PLACED
+            "type_name": o.get("type"),       # get_pending_orders puts the name string under "type"
+            "position_id": None,
+        }
     deals_by_position = {}
     for d in mt5_deals:
         deals_by_position.setdefault(d.get("position_id"), []).append(d)
