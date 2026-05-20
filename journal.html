@@ -107,6 +107,25 @@
         }
         .filter-hint:hover .filter-hint-popup { display: block; }
         .filter-hint-popup b { color: #fff; font-weight: 700; }
+        .status-checks {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 4px 10px;
+            background: #2a2e39;
+            border: 1px solid #363a45;
+            padding: 6px 10px;
+            border-radius: 4px;
+            font-size: 13px;
+            font-family: monospace;
+        }
+        .status-checks label {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            cursor: pointer;
+            color: #d1d4dc;
+        }
+        .status-checks input { accent-color: #2962ff; margin: 0; }
         .filter-hint-popup > div { margin-bottom: 2px; }
         .filter-hint-popup .hint-divider {
             margin: 6px 0;
@@ -354,16 +373,15 @@
             </div>
             <div class="filter-group">
                 <label class="filter-label">Статус<span class="filter-hint">?<span class="filter-hint-popup"><div class="hint-section-title">Жизненный цикл ордера</div><div><b>placed</b> — лимитник в MT5, ждёт цену</div><div><b>filled</b> — pending сработал, позиция открыта</div><div><b>closed</b> — позиция закрыта, есть финальный профит</div><div class="hint-divider"></div><div class="hint-section-title">Не дошло до сделки</div><div><b>cancelled</b> — pending сняли до срабатывания</div><div><b>expired</b> — pending протух по TTL</div><div><b>failed</b> — MT5 не принял ордер</div><div><b>rejected</b> — отклонён ещё до отправки в MT5</div><div><b>unknown</b> — лог говорит «размещено», MT5 не подтверждает</div></span></span></label>
-                <select class="filter-select" id="status">
-                    <option value="">Все</option>
-                    <option value="placed">Placed (активен)</option>
-                    <option value="filled">Filled (исполнен)</option>
-                    <option value="closed">Closed (закрыт)</option>
-                    <option value="cancelled">Cancelled</option>
-                    <option value="expired">Expired</option>
-                    <option value="failed">Failed</option>
-                    <option value="rejected">Rejected</option>
-                </select>
+                <div class="status-checks" id="statusChecks">
+                    <label><input type="checkbox" value="placed" checked> placed</label>
+                    <label><input type="checkbox" value="filled" checked> filled</label>
+                    <label><input type="checkbox" value="closed" checked> closed</label>
+                    <label><input type="checkbox" value="cancelled"> cancelled</label>
+                    <label><input type="checkbox" value="expired"> expired</label>
+                    <label><input type="checkbox" value="failed"> failed</label>
+                    <label><input type="checkbox" value="rejected"> rejected</label>
+                </div>
             </div>
             <div class="filter-group">
                 <label class="filter-label">Тип<span class="filter-hint">?<span class="filter-hint-popup"><div class="hint-section-title">Способ входа в сделку</div><div><b>pending</b> — лимитник (limit/stop): висит в MT5, ждёт пока цена коснётся entry. Сейчас сканер так и работает по умолчанию.</div><div><b>market</b> — рыночный ордер: открывается мгновенно по текущей цене, без ожидания.</div></span></span></label>
@@ -831,10 +849,18 @@
         `).join('');
     }
 
+    function selectedStatuses() {
+        return Array.from(document.querySelectorAll('#statusChecks input:checked')).map(c => c.value);
+    }
+
     function applyClientFilter(rows) {
         const kind = document.getElementById('kind').value;
-        if (!kind) return rows;
-        return rows.filter(r => r.kind === kind);
+        const statuses = selectedStatuses();
+        let out = rows;
+        if (kind) out = out.filter(r => r.kind === kind);
+        if (statuses.length) out = out.filter(r => statuses.includes(r.status));
+        else out = [];
+        return out;
     }
 
     function renderRows(rows) {
@@ -893,10 +919,8 @@
         showError('');
         const days = document.getElementById('days').value || 30;
         const pair = document.getElementById('pair').value.trim();
-        const status = document.getElementById('status').value;
         const params = new URLSearchParams({ days });
         if (pair) params.set('pair', pair);
-        if (status) params.set('status', status);
         try {
             const res = await fetch('/api/journal?' + params.toString(), {
                 headers: { 'X-Admin-Secret': adminSecret() },
@@ -935,6 +959,9 @@
     };
 
     document.getElementById('kind').addEventListener('change', () => renderRows(applyClientFilter(lastRows)));
+    document.querySelectorAll('#statusChecks input').forEach(c => {
+        c.addEventListener('change', () => renderRows(applyClientFilter(lastRows)));
+    });
 
     loadJournal();
     </script>
