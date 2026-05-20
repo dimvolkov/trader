@@ -6,6 +6,7 @@ COPY settings.html /usr/share/nginx/html/settings.html
 COPY journal.html /usr/share/nginx/html/journal.html
 COPY strategy.html /usr/share/nginx/html/strategy.html
 COPY ai-agent.html /usr/share/nginx/html/ai-agent.html
+COPY crypto.html /usr/share/nginx/html/crypto.html
 COPY design-test.html /usr/share/nginx/html/design-test.html
 COPY lightweight-charts.js /usr/share/nginx/html/lightweight-charts.js
 COPY login.html /usr/share/nginx/html/login.html
