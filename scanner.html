@@ -61,6 +61,12 @@
             border-color: #26a69a;
             color: #fff;
         }
+        button.toggle-off {
+            background: #4a2a2a;
+            border-color: #6b3a3a;
+            color: #ff8a80;
+        }
+        button.toggle-off:hover { background: #5a3434; }
         button:disabled {
             opacity: 0.5;
             cursor: not-allowed;
@@ -597,6 +603,7 @@
         <div class="header-right">
             <span id="balanceInfo" style="font-size:13px;color:#787b86"></span>
             <button id="healthBtn" onclick="runHealthCheck()" title="Проверить, что executor.py и MT5 терминал работают">🩺 Тест MT5</button>
+            <button id="autoOrderBtn" onclick="toggleAutoOrder()" title="Включить/выключить автоматическое выставление pending-ордеров для найденных сигналов" disabled>Авто-ордера: …</button>
             <button id="scanBtn" onclick="triggerServerScan()" title="Запустить серверный скан-цикл сейчас, не дожидаясь следующего по расписанию">Запустить скан сейчас</button>
         </div>
     </div>
@@ -1454,6 +1461,90 @@
             }
         }
 
+        let autoOrderState = null; // last loaded pending_config
+        function applyAutoOrderButton(cfg) {
+            const btn = document.getElementById('autoOrderBtn');
+            if (!btn) return;
+            if (!cfg) {
+                btn.disabled = true;
+                btn.classList.remove('active', 'toggle-off');
+                btn.textContent = 'Авто-ордера: …';
+                return;
+            }
+            autoOrderState = cfg;
+            btn.disabled = false;
+            if (cfg.use_pending) {
+                btn.classList.add('active');
+                btn.classList.remove('toggle-off');
+                const ttl = cfg.ttl_hours ? `, ttl ${cfg.ttl_hours}ч` : '';
+                btn.textContent = `Авто-ордера: ВКЛ (${cfg.pending_type || 'pending'}${ttl})`;
+                btn.title = 'Авто-выставление pending включено. Нажми, чтобы выключить.';
+            } else {
+                btn.classList.remove('active');
+                btn.classList.add('toggle-off');
+                btn.textContent = 'Авто-ордера: ВЫКЛ';
+                btn.title = 'Авто-выставление выключено — сигналы появятся, но ордер не уйдёт. Нажми, чтобы включить.';
+            }
+        }
+
+        async function loadAutoOrderState() {
+            try {
+                const res = await fetch('/api/pending-config');
+                if (!res.ok) throw new Error(`HTTP ${res.status}`);
+                const data = await res.json();
+                if (!data.success || !data.config) throw new Error(data.error || 'no config');
+                applyAutoOrderButton(data.config);
+            } catch (err) {
+                const btn = document.getElementById('autoOrderBtn');
+                if (btn) {
+                    btn.disabled = true;
+                    btn.textContent = 'Авто-ордера: ошибка';
+                    btn.title = 'Не удалось загрузить pending_config: ' + err.message;
+                }
+            }
+        }
+
+        window.toggleAutoOrder = async function() {
+            const btn = document.getElementById('autoOrderBtn');
+            if (!btn || btn.disabled || !autoOrderState) return;
+            const next = !autoOrderState.use_pending;
+            let secret = localStorage.getItem('scannerAdminSecret') || '';
+            if (!secret) {
+                secret = prompt('Введите admin secret сканера (сохранится в браузере):') || '';
+                if (!secret) return;
+                localStorage.setItem('scannerAdminSecret', secret);
+            }
+            const confirmMsg = next
+                ? 'Включить авто-выставление pending-ордеров для всех будущих сигналов?'
+                : 'Выключить авто-выставление? Сигналы продолжат появляться, но ордер на executor отправляться не будет.';
+            if (!confirm(confirmMsg)) return;
+            btn.disabled = true;
+            const prevText = btn.textContent;
+            btn.textContent = next ? 'Включаю…' : 'Выключаю…';
+            try {
+                const res = await fetch('/api/pending-config', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json', 'X-Admin-Secret': secret },
+                    body: JSON.stringify({ use_pending: next }),
+                });
+                if (res.status === 401) {
+                    localStorage.removeItem('scannerAdminSecret');
+                    alert('Неверный admin secret — сохранённый удалён, попробуй ещё раз.');
+                    btn.textContent = prevText;
+                    btn.disabled = false;
+                    return;
+                }
+                const data = await res.json().catch(() => ({ success: false, error: 'bad JSON' }));
+                if (!data.success) throw new Error(data.error || 'fail');
+                applyAutoOrderButton(data.config || { ...autoOrderState, use_pending: next });
+                addScanLog('', `Авто-ордера ${next ? 'включены' : 'выключены'}`, next ? 'success' : 'warn');
+            } catch (err) {
+                addScanLog('', `Не удалось переключить авто-ордера: ${err.message}`, 'error');
+                btn.textContent = prevText;
+                btn.disabled = false;
+            }
+        };
+
         window.triggerServerScan = async function() {
             if (scanBtn.disabled) return;
             scanBtn.disabled = true;
@@ -1939,6 +2030,7 @@
         // --- Init ---
         initTableRows();
         loadServerScanState();
+        loadAutoOrderState();
         startPolling();
     })();
     </script>
