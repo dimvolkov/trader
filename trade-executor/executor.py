@@ -508,20 +508,26 @@ async def journal(
         return (ORDER_STATE_NAMES.get(st, str(st)), o.get("position_id"))
 
     def _profit_from_position(position_id):
-        """Return (profit, close_price, close_time, in_deal) for a position."""
+        """Return (profit, close_price, close_time, in_deal) for a position.
+
+        Sums profit+swap+commission across ALL deals of the position so the result
+        matches MT5's "Profit" line. Alfa-Forex (and similar) charges commission on
+        the entry deal; ignoring it underreported losses. Partial closes also produce
+        multiple out-deals — the final close price/time comes from the last one.
+        """
         if not position_id:
             return (None, None, None, None)
         deals = deals_by_position.get(position_id, [])
         in_deal = next((d for d in deals if d.get("entry") == 0), None)
-        out_deal = next((d for d in deals if d.get("entry") == 1), None)
-        if out_deal:
-            return (
-                round(out_deal["profit"] + out_deal.get("swap", 0) + out_deal.get("commission", 0), 2),
-                out_deal["price"],
-                out_deal["time"],
-                in_deal,
-            )
-        return (None, None, None, in_deal)
+        out_deals = [d for d in deals if d.get("entry") == 1]
+        if not out_deals:
+            return (None, None, None, in_deal)
+        total = sum(
+            d.get("profit", 0) + d.get("swap", 0) + d.get("commission", 0)
+            for d in deals
+        )
+        last_out = max(out_deals, key=lambda d: d.get("time") or 0)
+        return (round(total, 2), last_out["price"], last_out["time"], in_deal)
 
     # Walk local attempts (pending and market)
     for r in log_recs:
@@ -660,6 +666,7 @@ async def journal(
         "cancelled": sum(1 for r in rows if r["status"] == "cancelled"),
         "expired": sum(1 for r in rows if r["status"] == "expired"),
         "failed": sum(1 for r in rows if r["status"] in ("failed", "rejected")),
+        "unknown": sum(1 for r in rows if r["status"] in ("unknown", "started", "partial")),
     }
 
     return {"success": True, "summary": summary, "rows": rows}
@@ -675,8 +682,17 @@ def _empty_stats() -> Dict[str, Any]:
     }
 
 
-def _stats_for_deals(deals: List[dict], include_curve: bool = False) -> Dict[str, Any]:
-    """Compute winrate + risk metrics from a list of deals (only 'out' deals carry profit)."""
+def _stats_for_deals(
+    deals: List[dict],
+    include_curve: bool = False,
+    position_deals_map: Optional[Dict[int, List[dict]]] = None,
+) -> Dict[str, Any]:
+    """Compute winrate + risk metrics from a list of deals (only 'out' deals carry profit).
+
+    If `position_deals_map` is provided, total_profit sums profit+swap+commission across
+    every deal of each closed position (matches MT5's "Profit" line, including entry-side
+    commission). Without the map it falls back to summing only the out deals.
+    """
     outs = [d for d in deals if d.get("entry") == 1]   # entry=1 → out (closing)
     if not outs:
         return _empty_stats()
@@ -684,7 +700,14 @@ def _stats_for_deals(deals: List[dict], include_curve: bool = False) -> Dict[str
     outs_sorted = sorted(outs, key=lambda d: d.get("time") or 0)
     wins = [d for d in outs if d["profit"] > 0]
     losses = [d for d in outs if d["profit"] <= 0]
-    total = sum(d["profit"] + d.get("swap", 0) + d.get("commission", 0) for d in outs)
+    if position_deals_map:
+        total = 0.0
+        for d in outs:
+            pid = d.get("position_id")
+            for dd in position_deals_map.get(pid, [d]):
+                total += dd.get("profit", 0) + dd.get("swap", 0) + dd.get("commission", 0)
+    else:
+        total = sum(d["profit"] + d.get("swap", 0) + d.get("commission", 0) for d in outs)
     profits = [d["profit"] for d in outs]
 
     # Profit factor
@@ -744,7 +767,10 @@ def _stats_for_deals(deals: List[dict], include_curve: bool = False) -> Dict[str
     return result
 
 
-def _stats_by_hour(deals: List[dict]) -> Dict[int, Dict[str, Any]]:
+def _stats_by_hour(
+    deals: List[dict],
+    position_deals_map: Optional[Dict[int, List[dict]]] = None,
+) -> Dict[int, Dict[str, Any]]:
     """Bucket out-deals by MSK hour (UTC+3)."""
     buckets: Dict[int, List[dict]] = {}
     for d in deals:
@@ -755,10 +781,16 @@ def _stats_by_hour(deals: List[dict]) -> Dict[int, Dict[str, Any]]:
             continue
         hour_msk = ((datetime.fromtimestamp(ts, tz=timezone.utc).hour + 3) % 24)
         buckets.setdefault(hour_msk, []).append(d)
-    return {h: _stats_for_deals(ds) for h, ds in sorted(buckets.items())}
+    return {
+        h: _stats_for_deals(ds, position_deals_map=position_deals_map)
+        for h, ds in sorted(buckets.items())
+    }
 
 
-def _stats_by_weekday(deals: List[dict]) -> Dict[int, Dict[str, Any]]:
+def _stats_by_weekday(
+    deals: List[dict],
+    position_deals_map: Optional[Dict[int, List[dict]]] = None,
+) -> Dict[int, Dict[str, Any]]:
     """Bucket out-deals by MSK weekday (0=Mon..6=Sun)."""
     buckets: Dict[int, List[dict]] = {}
     for d in deals:
@@ -770,7 +802,10 @@ def _stats_by_weekday(deals: List[dict]) -> Dict[int, Dict[str, Any]]:
         msk_dt = datetime.fromtimestamp(ts, tz=timezone.utc) + timedelta(hours=3)
         dow = msk_dt.weekday()  # 0=Mon..6=Sun
         buckets.setdefault(dow, []).append(d)
-    return {d: _stats_for_deals(ds) for d, ds in sorted(buckets.items())}
+    return {
+        d: _stats_for_deals(ds, position_deals_map=position_deals_map)
+        for d, ds in sorted(buckets.items())
+    }
 
 
 def _stats_by_signal_context(local_records: List[dict], orders: List[dict], deals: List[dict]) -> Dict[str, Dict[str, Any]]:
@@ -778,9 +813,13 @@ def _stats_by_signal_context(local_records: List[dict], orders: List[dict], deal
     # Build ticket → position_id → out-deal map
     tkt_to_pos = {o["ticket"]: o.get("position_id") for o in orders if o.get("ticket")}
     pos_to_out = {}
+    position_deals_map: Dict[int, List[dict]] = {}
     for d in deals:
         if d.get("entry") == 1 and d.get("position_id"):
             pos_to_out[d["position_id"]] = d
+        pid = d.get("position_id")
+        if pid:
+            position_deals_map.setdefault(pid, []).append(d)
 
     groups: Dict[str, List[dict]] = {}
     for att in local_records:
@@ -798,7 +837,10 @@ def _stats_by_signal_context(local_records: List[dict], orders: List[dict], deal
         else:
             # No outcome yet — count as placed but not tradeable for stats
             groups.setdefault(key, [])
-    return {k: _stats_for_deals(ds) for k, ds in sorted(groups.items())}
+    return {
+        k: _stats_for_deals(ds, position_deals_map=position_deals_map)
+        for k, ds in sorted(groups.items())
+    }
 
 
 @app.get("/stats")
@@ -826,22 +868,31 @@ async def stats(
     deals = deals_r.get("deals", [])
     orders = orders_r.get("orders", [])
 
+    position_deals_map: Dict[int, List[dict]] = {}
+    for d in deals:
+        pid = d.get("position_id")
+        if pid:
+            position_deals_map.setdefault(pid, []).append(d)
+
     # Overall
-    overall = _stats_for_deals(deals, include_curve=include_curve)
-    by_hour = _stats_by_hour(deals)
-    by_weekday = _stats_by_weekday(deals)
+    overall = _stats_for_deals(deals, include_curve=include_curve, position_deals_map=position_deals_map)
+    by_hour = _stats_by_hour(deals, position_deals_map=position_deals_map)
+    by_weekday = _stats_by_weekday(deals, position_deals_map=position_deals_map)
 
     # By pair
     by_pair = {}
     for sym in sorted({d["symbol"] for d in deals}):
-        by_pair[sym] = _stats_for_deals([d for d in deals if d["symbol"] == sym])
+        by_pair[sym] = _stats_for_deals(
+            [d for d in deals if d["symbol"] == sym],
+            position_deals_map=position_deals_map,
+        )
 
     # Pending vs market
     market_deals = [d for d in deals if d.get("magic") == mt5_bridge.MAGIC_MARKET]
     pending_deals = [d for d in deals if d.get("magic") == mt5_bridge.MAGIC_PENDING]
     by_kind = {
-        "market": _stats_for_deals(market_deals),
-        "pending": _stats_for_deals(pending_deals),
+        "market": _stats_for_deals(market_deals, position_deals_map=position_deals_map),
+        "pending": _stats_for_deals(pending_deals, position_deals_map=position_deals_map),
     }
 
     # Pending lifecycle stats (from MT5 orders)
@@ -904,10 +955,16 @@ async def analysis(
     orders = mt5_bridge.get_history_orders(from_ts, symbol=symbol).get("orders", [])
     local = read_trade_log(days=days, pair=pair)
 
+    position_deals_map: Dict[int, List[dict]] = {}
+    for d in deals:
+        pid = d.get("position_id")
+        if pid:
+            position_deals_map.setdefault(pid, []).append(d)
+
     out_deals = [d for d in deals if d.get("entry") == 1]
-    stats_all = _stats_for_deals(deals, include_curve=True)
-    by_hour = _stats_by_hour(deals)
-    by_weekday = _stats_by_weekday(deals)
+    stats_all = _stats_for_deals(deals, include_curve=True, position_deals_map=position_deals_map)
+    by_hour = _stats_by_hour(deals, position_deals_map=position_deals_map)
+    by_weekday = _stats_by_weekday(deals, position_deals_map=position_deals_map)
     by_signal_context = _stats_by_signal_context(local, orders, deals)
 
     pending_orders = [o for o in orders if o.get("magic") == mt5_bridge.MAGIC_PENDING]

@@ -841,6 +841,7 @@
             ['Cancelled', s.cancelled, ''],
             ['Expired', s.expired, ''],
             ['Failed', s.failed, ''],
+            ['Unknown', s.unknown ?? 0, ''],
         ];
         document.getElementById('summary').innerHTML = tiles.map(([l, v, k]) => `
             <div class="stat">
