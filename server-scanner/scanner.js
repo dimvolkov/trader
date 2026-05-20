@@ -761,7 +761,13 @@ async function getCurrentMarketPrice(pair) {
     try {
         const data = await execFetch('GET', `/symbol/${encodeURIComponent(pair.replace('/', ''))}`);
         if (!data.success) return null;
-        return { bid: data.bid, ask: data.ask };
+        return {
+            bid: data.bid,
+            ask: data.ask,
+            point: data.point,
+            digits: data.digits,
+            stops_level: data.stops_level,
+        };
     } catch {
         return null;
     }
@@ -837,6 +843,22 @@ async function placePendingOrder(pair, result, pc) {
             : Math.max(0, e.entry - refPrice);
         if (totalDist > 0 && moved / totalDist > pc.max_distance_pct_from_entry) {
             log(`  ${pair}: SKIPPED pending — price drifted ${((moved/totalDist)*100).toFixed(0)}% towards take (> ${(pc.max_distance_pct_from_entry*100).toFixed(0)}%)`);
+            return;
+        }
+    }
+
+    // Stops-level filter: brokers (e.g. Alfa-Forex) require SL/TP to sit at
+    // least `stops_level * point` away from entry; closer stops produce
+    // 10016 Invalid stops. The Slom strategy can yield very tight SL on
+    // narrow corrections — skip rather than widen, since widening breaks
+    // the strategy's invariant (SL = correction extreme + buffer).
+    if (market && market.stops_level > 0 && market.point > 0) {
+        const minDist = market.stops_level * market.point;
+        const slDist = Math.abs(e.entry - e.stop);
+        const tpDist = Math.abs(e.entry - e.take);
+        if (slDist < minDist || tpDist < minDist) {
+            const d = market.digits || 5;
+            log(`  ${pair}: SKIPPED pending — stops too tight (SL ${slDist.toFixed(d)}, TP ${tpDist.toFixed(d)} < broker min ${minDist.toFixed(d)} = ${market.stops_level} pts)`);
             return;
         }
     }
