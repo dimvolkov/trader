@@ -1425,6 +1425,18 @@ async function runHealthCheck() {
             add('Соединение с брокером', 'fail',
                 'MT5 не подключён к торговому серверу. Залогинься в торговый счёт.');
         }
+        // Active probe: terminal_info.connected can be true even when the
+        // trade account session has dropped — only a real orders_get() probe
+        // catches that (see mt5_bridge.terminal_info).
+        if (td.authorized === undefined) {
+            add('Авторизация в торговом счёте', 'skip',
+                'Старая версия executor.py без active-probe. Обнови executor (git pull + Stop-Process + Start-ScheduledTask) и проверь ещё раз.');
+        } else if (td.authorized) {
+            add('Авторизация в торговом счёте', 'ok', 'orders_get() отвечает без auth-ошибок');
+        } else {
+            add('Авторизация в торговом счёте', 'fail',
+                `Сессия в торговом счёте отвалилась: ${td.auth_error || 'неизвестная ошибка'}. Открой MT5 на VPS, File → Login to Trade Account, введи пароль заново.`);
+        }
         if (td.trade_allowed && !td.tradeapi_disabled) {
             add('Алготрейдинг разрешён', 'ok', 'AutoTrading включён в терминале');
         } else {

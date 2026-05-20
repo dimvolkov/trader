@@ -110,9 +110,25 @@ def terminal_info() -> dict:
     if info is None:
         return {"success": False, "error": "No terminal info"}
 
+    # Active probe: terminal_info.connected only reports the link to the
+    # platform server; the trade account can be silently logged out while
+    # the terminal stays "connected". A real call like orders_get() is the
+    # only reliable way to detect that — it returns None + last_error
+    # (-6, 'Terminal: Authorization failed') when the session is gone.
+    authorized = True
+    auth_error = None
+    probe = mt5.orders_get()
+    if probe is None:
+        err = mt5.last_error()
+        if err and err[0] != 1:   # 1 == RES_S_OK
+            authorized = False
+            auth_error = f"{err[0]}: {err[1]}" if len(err) >= 2 else str(err)
+
     return {
         "success": True,
         "connected": bool(info.connected),
+        "authorized": authorized,
+        "auth_error": auth_error,
         "trade_allowed": bool(info.trade_allowed),
         "tradeapi_disabled": bool(info.tradeapi_disabled),
         "name": info.name,
