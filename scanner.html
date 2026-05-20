@@ -597,45 +597,12 @@
         <div class="header-right">
             <span id="balanceInfo" style="font-size:13px;color:#787b86"></span>
             <button id="healthBtn" onclick="runHealthCheck()" title="Проверить, что executor.py и MT5 терминал работают">🩺 Тест MT5</button>
-            <button id="scanBtn" onclick="scanOnce()">Сканировать</button>
+            <button id="scanBtn" onclick="triggerServerScan()" title="Запустить серверный скан-цикл сейчас, не дожидаясь следующего по расписанию">Запустить скан сейчас</button>
         </div>
     </div>
-    <div class="watchlist-config">
-        <label>Источник:</label>
-        <select id="dataSource" onchange="onSourceChange()">
-            <option value="twelvedata">Twelve Data</option>
-            <option value="tradermade">TraderMade</option>
-            <option value="polygon">Polygon.io</option>
-            <option value="finnhub">Finnhub</option>
-            <option value="fcsapi">FCS API</option>
-            <option value="alphavantage">Alpha Vantage</option>
-        </select>
-        <label>API ключ:</label>
-        <input type="text" id="apiKeyInput" placeholder="Введите API ключ" spellcheck="false" onchange="saveSettings()">
-        <label>Watchlist:</label>
-        <select id="pair1"></select>
-        <select id="pair2"></select>
-        <select id="pair3"></select>
-        <select id="pair4"></select>
-    </div>
-    <div class="schedule-config">
-        <label class="schedule-toggle" title="Включить автосканирование">
-            <input type="checkbox" id="autoScanToggle" onchange="toggleAutoScan()">
-            <span class="slider"></span>
-        </label>
-        <label>Авто</label>
-        <span class="schedule-separator">|</span>
-        <label>Окно:</label>
-        <input type="number" id="scheduleFrom" min="0" max="23" value="8" onchange="saveScheduleSettings()">
-        <span class="schedule-separator">—</span>
-        <input type="number" id="scheduleTo" min="0" max="23" value="20" onchange="saveScheduleSettings()">
-        <label>ч (МСК)</label>
-        <span class="schedule-separator">|</span>
-        <label>Интервал:</label>
-        <input type="number" id="scheduleInterval" min="1" max="24" value="1" onchange="saveScheduleSettings()">
-        <label>ч</label>
-        <span class="schedule-separator">|</span>
-        <span id="autoScanStatus" style="font-size:12px;color:#787b86;">Выкл</span>
+    <div class="watchlist-config" id="serverStatusBar" title="Серверный сканер крутится в Docker. Параметры задаются через env переменные. Изменения требуют рестарта контейнера.">
+        <span id="serverStatusInfo" style="font-size:13px;color:#b2b5be;">Загружаю состояние сервера…</span>
+        <span style="margin-left:auto;font-size:11px;color:#787b86;">Только просмотр — настройка через env</span>
     </div>
     <div class="table-wrapper">
         <table>
@@ -690,49 +657,20 @@
     <script src="lightweight-charts.js"></script>
     <script>
     (function() {
-        // --- Data source configs ---
+        // Data source labels for the server-status banner.
         const DATA_SOURCES = {
-            twelvedata: { label: 'Twelve Data', defaultKey: '8694f4e28a974a0eba808458ceb33bfb', rateDelay: 12000 },
-            tradermade: { label: 'TraderMade', defaultKey: '', rateDelay: 3000 },
-            polygon:    { label: 'Polygon.io', defaultKey: '', rateDelay: 12000 },
-            finnhub:    { label: 'Finnhub', defaultKey: '', rateDelay: 1500 },
-            fcsapi:     { label: 'FCS API', defaultKey: '', rateDelay: 21000 },
-            alphavantage: { label: 'Alpha Vantage', defaultKey: '', rateDelay: 15000 },
-            oanda:      { label: 'OANDA', defaultKey: '', rateDelay: 500 },
+            twelvedata:   { label: 'Twelve Data' },
+            tradermade:   { label: 'TraderMade' },
+            polygon:      { label: 'Polygon.io' },
+            finnhub:      { label: 'Finnhub' },
+            fcsapi:       { label: 'FCS API' },
+            alphavantage: { label: 'Alpha Vantage' },
+            oanda:        { label: 'OANDA' },
         };
-
-        const SOURCE_STORAGE_KEY = 'scannerDataSource';
-        const APIKEYS_STORAGE_KEY = 'scannerApiKeys';
-
-        const PAIRS = {
-            'RUB пары': [
-                'USD/RUB', 'EUR/RUB', 'GBP/RUB', 'CNY/RUB', 'CHF/RUB', 'JPY/RUB',
-                'CAD/RUB', 'AUD/RUB', 'BRL/RUB', 'INR/RUB', 'PLN/RUB', 'SEK/RUB',
-                'SGD/RUB', 'ZAR/RUB', 'UAH/RUB', 'AZN/RUB', 'GEL/RUB', 'KGS/RUB',
-                'TJS/RUB', 'MDL/RUB', 'BGN/RUB',
-            ],
-            'Мажоры': [
-                'EUR/USD', 'GBP/USD', 'USD/JPY', 'USD/CHF', 'AUD/USD', 'USD/CAD', 'NZD/USD',
-            ],
-            'Кроссы EUR': [
-                'EUR/GBP', 'EUR/JPY', 'EUR/CHF', 'EUR/AUD', 'EUR/CAD', 'EUR/NZD',
-            ],
-            'Кроссы GBP': [
-                'GBP/JPY', 'GBP/CHF', 'GBP/AUD', 'GBP/CAD', 'GBP/NZD',
-            ],
-            'Экзотика': [
-                'USD/TRY', 'USD/ZAR', 'USD/MXN', 'USD/BRL', 'USD/INR', 'USD/CNY',
-                'USD/SGD', 'USD/HKD', 'USD/PLN', 'USD/SEK', 'USD/NOK', 'USD/DKK',
-                'USD/THB', 'USD/KRW', 'USD/ARS', 'USD/CLP',
-            ],
-        };
-
-        const DEFAULT_WATCHLIST = ['EUR/USD', 'GBP/USD', 'USD/JPY', 'USD/CHF'];
-        const STORAGE_KEY = 'scannerWatchlist';
 
         // --- Bankroll ---
         let DEPOSIT = 100000; // ₽ (default, updated from MT5)
-        const RISK_PCT = 0.01;  // 1%
+        let RISK_PCT = 0.01;  // 1% (updated from server scan state)
         let MAX_RISK = DEPOSIT * RISK_PCT; // 1000 ₽
 
         async function fetchBalance() {
@@ -753,41 +691,14 @@
         fetchBalance();
 
         // --- State ---
-        let scanning = false;
-        let scanAbort = false;
-        let notifiedEntries = new Set();
-        const HISTORY_STORAGE_KEY = 'scannerHistory';
-        let scanHistory = {};
-        const CHARTDATA_STORAGE_KEY = 'scannerChartData_v1';
+        // Mirrors server-side scan state fetched from /api/scan-state.
+        let serverWatchlist = [];          // pairs the server is actually scanning
+        let serverScanState = null;        // { isScanning, currentPair, nextScanAt, ... }
+        let serverScanMeta = null;         // { dataSource, intervalHours, scheduleFrom, scheduleTo, ... }
+        let pollTimerId = null;
+        const POLL_INTERVAL_MS = 30000;
 
-        function loadHistory() {
-            try {
-                const saved = JSON.parse(localStorage.getItem(HISTORY_STORAGE_KEY));
-                if (saved && typeof saved === 'object') scanHistory = saved;
-            } catch {}
-        }
-
-        function saveHistory() {
-            try {
-                localStorage.setItem(HISTORY_STORAGE_KEY, JSON.stringify(scanHistory));
-            } catch {}
-        }
-
-        function loadChartDataCache() {
-            try {
-                const saved = JSON.parse(localStorage.getItem(CHARTDATA_STORAGE_KEY));
-                if (saved && typeof saved === 'object') return saved;
-            } catch {}
-            return {};
-        }
-
-        function saveChartDataCache() {
-            try {
-                localStorage.setItem(CHARTDATA_STORAGE_KEY, JSON.stringify(pairChartData));
-            } catch (e) { console.warn('Failed to save chart data cache:', e); }
-        }
-
-        loadHistory();
+        function getWatchlist() { return serverWatchlist; }
 
         // --- DOM refs ---
         const scanBtn = document.getElementById('scanBtn');
@@ -795,633 +706,8 @@
         const statusText = document.getElementById('statusText');
         const cycleInfo = document.getElementById('cycleInfo');
         const scannerBody = document.getElementById('scannerBody');
-        const dataSourceSelect = document.getElementById('dataSource');
-        const apiKeyInput = document.getElementById('apiKeyInput');
-        const pairSelects = [
-            document.getElementById('pair1'),
-            document.getElementById('pair2'),
-            document.getElementById('pair3'),
-            document.getElementById('pair4'),
-        ];
+        const serverStatusInfo = document.getElementById('serverStatusInfo');
 
-        // --- Populate pair selectors ---
-        function populateSelectors() {
-            const saved = loadWatchlist();
-            pairSelects.forEach((sel, idx) => {
-                sel.innerHTML = '';
-                for (const [group, pairs] of Object.entries(PAIRS)) {
-                    const optgroup = document.createElement('optgroup');
-                    optgroup.label = group;
-                    for (const pair of pairs) {
-                        const opt = document.createElement('option');
-                        opt.value = pair;
-                        opt.textContent = pair;
-                        if (pair === saved[idx]) opt.selected = true;
-                        optgroup.appendChild(opt);
-                    }
-                    sel.appendChild(optgroup);
-                }
-                sel.addEventListener('change', saveWatchlist);
-            });
-        }
-
-        function getWatchlist() {
-            return pairSelects.map(s => s.value);
-        }
-
-        function loadWatchlist() {
-            try {
-                const saved = JSON.parse(localStorage.getItem(STORAGE_KEY));
-                if (Array.isArray(saved) && saved.length === 4) return saved;
-            } catch {}
-            return DEFAULT_WATCHLIST;
-        }
-
-        function saveWatchlist() {
-            localStorage.setItem(STORAGE_KEY, JSON.stringify(getWatchlist()));
-        }
-
-        function getDataSource() {
-            return loadDataSource();
-        }
-
-        function loadDataSource() {
-            try {
-                const saved = localStorage.getItem(SOURCE_STORAGE_KEY);
-                if (saved && DATA_SOURCES[saved]) return saved;
-            } catch {}
-            return 'twelvedata';
-        }
-
-        function loadApiKeys() {
-            try {
-                const saved = JSON.parse(localStorage.getItem(APIKEYS_STORAGE_KEY));
-                if (saved && typeof saved === 'object') return saved;
-            } catch {}
-            return {};
-        }
-
-        function getApiKey(source) {
-            const saved = loadApiKeys();
-            if (saved[source]) return saved[source];
-            // Fallback to chart page keys
-            try {
-                const chartKeys = JSON.parse(localStorage.getItem('chartApiKeys'));
-                if (chartKeys && chartKeys[source]) return chartKeys[source];
-            } catch {}
-            return DATA_SOURCES[source].defaultKey || '';
-        }
-
-        window.saveSettings = function() {
-            const source = getDataSource();
-            localStorage.setItem(SOURCE_STORAGE_KEY, source);
-            const keys = loadApiKeys();
-            keys[source] = apiKeyInput.value.trim();
-            localStorage.setItem(APIKEYS_STORAGE_KEY, JSON.stringify(keys));
-            saveWatchlist();
-        };
-
-        window.onSourceChange = function() {
-            const source = getDataSource();
-            localStorage.setItem(SOURCE_STORAGE_KEY, source);
-            apiKeyInput.value = getApiKey(source);
-        };
-
-        // --- Analysis functions (copied from index.html) ---
-
-        function parseDatetime(dt) {
-            const parts = dt.split(' ');
-            const d = parts[0].split('-');
-            if (parts.length === 1) {
-                return Date.UTC(+d[0], +d[1] - 1, +d[2]) / 1000;
-            }
-            const t = parts[1].split(':');
-            return Date.UTC(+d[0], +d[1] - 1, +d[2], +t[0], +t[1], +t[2] || 0) / 1000;
-        }
-
-        function findSwingPoints(candles, lookback) {
-            const swings = [];
-            for (let i = lookback; i < candles.length - lookback; i++) {
-                let isHigh = true;
-                let isLow = true;
-                for (let j = 1; j <= lookback; j++) {
-                    if (candles[i].high < candles[i - j].high || candles[i].high < candles[i + j].high) isHigh = false;
-                    if (candles[i].low > candles[i - j].low || candles[i].low > candles[i + j].low) isLow = false;
-                }
-                if (isHigh) swings.push({ index: i, time: candles[i].time, price: candles[i].high, type: 'high' });
-                if (isLow) swings.push({ index: i, time: candles[i].time, price: candles[i].low, type: 'low' });
-            }
-            swings.sort((a, b) => a.time - b.time);
-            return swings;
-        }
-
-        function determineTrend(swings) {
-            const highs = swings.filter(s => s.type === 'high');
-            const lows = swings.filter(s => s.type === 'low');
-            if (highs.length < 2 || lows.length < 2) return 'range';
-            const lastHighs = highs.slice(-3);
-            const lastLows = lows.slice(-3);
-            console.log('Trend detection — highs:', lastHighs.map(h => h.price), 'lows:', lastLows.map(l => l.price));
-            if (lastHighs.length >= 2 && lastLows.length >= 2) {
-                const hLen = lastHighs.length;
-                const lLen = lastLows.length;
-                // Check last pair of highs and lows
-                const lastHH = lastHighs[hLen - 1].price > lastHighs[hLen - 2].price;
-                const lastHL = lastLows[lLen - 1].price > lastLows[lLen - 2].price;
-                const lastLH = lastHighs[hLen - 1].price < lastHighs[hLen - 2].price;
-                const lastLL = lastLows[lLen - 1].price < lastLows[lLen - 2].price;
-                // If 3 points available, use scoring; otherwise use last pair
-                if (hLen >= 3 && lLen >= 3) {
-                    const hhCount = (lastHighs[1].price > lastHighs[0].price ? 1 : 0) + (lastHighs[2].price > lastHighs[1].price ? 1 : 0);
-                    const hlCount = (lastLows[1].price > lastLows[0].price ? 1 : 0) + (lastLows[2].price > lastLows[1].price ? 1 : 0);
-                    const lhCount = (lastHighs[1].price < lastHighs[0].price ? 1 : 0) + (lastHighs[2].price < lastHighs[1].price ? 1 : 0);
-                    const llCount = (lastLows[1].price < lastLows[0].price ? 1 : 0) + (lastLows[2].price < lastLows[1].price ? 1 : 0);
-                    // Relaxed: need at least 1 of 2 matches for both highs and lows
-                    if (hhCount >= 1 && hlCount >= 1) return 'up';
-                    if (lhCount >= 1 && llCount >= 1) return 'down';
-                } else {
-                    if (lastHH && lastHL) return 'up';
-                    if (lastLH && lastLL) return 'down';
-                }
-            }
-            return 'range';
-        }
-
-        function segmentSwings(swings, trend) {
-            if (swings.length < 2) return [];
-            const alternating = [swings[0]];
-            for (let i = 1; i < swings.length; i++) {
-                const last = alternating[alternating.length - 1];
-                if (swings[i].type === last.type) {
-                    if (swings[i].type === 'high' && swings[i].price > last.price) alternating[alternating.length - 1] = swings[i];
-                    else if (swings[i].type === 'low' && swings[i].price < last.price) alternating[alternating.length - 1] = swings[i];
-                } else {
-                    alternating.push(swings[i]);
-                }
-            }
-            const segments = [];
-            for (let i = 0; i < alternating.length - 1; i++) {
-                const from = alternating[i];
-                const to = alternating[i + 1];
-                let segType;
-                if (trend === 'up') segType = (from.type === 'low' && to.type === 'high') ? 'impulse' : 'correction';
-                else if (trend === 'down') segType = (from.type === 'high' && to.type === 'low') ? 'impulse' : 'correction';
-                else segType = (i % 2 === 0) ? 'impulse' : 'correction';
-                segments.push({
-                    startTime: from.time, startPrice: from.price,
-                    endTime: to.time, endPrice: to.price,
-                    type: segType,
-                    size: Math.abs(to.price - from.price),
-                });
-            }
-            return segments;
-        }
-
-        function checkReversal(impulses) {
-            const corrections = impulses.filter(s => s.type === 'correction');
-            const imps = impulses.filter(s => s.type === 'impulse');
-            if (corrections.length === 0 || imps.length === 0) return { reversal: false, reason: 'Недостаточно данных' };
-            const lastCorr = corrections[corrections.length - 1];
-            const lastImp = imps[imps.length - 1];
-            if (lastCorr.size > lastImp.size) return { reversal: true, reason: `Корр > Имп` };
-            return { reversal: false, reason: 'Тренд продолжается' };
-        }
-
-        function constructLevels(impulses, trend, swings) {
-            const imps = impulses.filter(s => s.type === 'impulse');
-            if (imps.length === 0) return {};
-            const lastImp = imps[imps.length - 1];
-            const impulseEnd = lastImp.endPrice;
-            const impulseStart = lastImp.startPrice;
-            let target = null;
-            const relevantSwings = trend === 'up'
-                ? swings.filter(s => s.type === 'high' && s.price > impulseEnd)
-                : swings.filter(s => s.type === 'low' && s.price < impulseEnd);
-            if (relevantSwings.length > 0) {
-                relevantSwings.sort((a, b) => trend === 'up' ? a.price - b.price : b.price - a.price);
-                target = relevantSwings[0].price;
-            } else {
-                const size = Math.abs(impulseEnd - impulseStart);
-                target = trend === 'up' ? impulseEnd + size : impulseEnd - size;
-            }
-            return { impulseEnd, impulseStart, target };
-        }
-
-        function detectSlom(m30Candles, trendDir, h1Levels) {
-            if (!h1Levels.impulseEnd) return null;
-            const m30Swings = findSwingPoints(m30Candles, 4);
-            if (m30Swings.length < 4) return null;
-            const recentSwings = m30Swings.slice(-10);
-            const microHighs = recentSwings.filter(s => s.type === 'high');
-            const microLows = recentSwings.filter(s => s.type === 'low');
-            if (microHighs.length < 2 || microLows.length < 2) return null;
-            const lastMicroHighs = microHighs.slice(-2);
-            const lastMicroLows = microLows.slice(-2);
-            let signal1 = null, signal2 = null, signal3 = null;
-
-            if (trendDir === 'up') {
-                const microTop = lastMicroHighs[lastMicroHighs.length - 1];
-                const breakLevel = lastMicroHighs[lastMicroHighs.length - 2].price;
-                if (microTop.price > breakLevel) {
-                    signal1 = { price: breakLevel, time: microTop.time, label: `пробой ${breakLevel.toFixed(4)}` };
-                    const pullbackZone = breakLevel + (microTop.price - breakLevel) * 0.5;
-                    for (let i = microTop.index + 1; i < m30Candles.length; i++) {
-                        if (m30Candles[i].low <= pullbackZone && m30Candles[i].low >= breakLevel * 0.999) {
-                            signal2 = { price: m30Candles[i].low, time: m30Candles[i].time, label: `откат к ${m30Candles[i].low.toFixed(4)}` };
-                            break;
-                        }
-                    }
-                    if (signal2) {
-                        for (let i = m30Candles.findIndex(c => c.time >= signal2.time) + 1; i < m30Candles.length; i++) {
-                            if (m30Candles[i].high > microTop.price) {
-                                signal3 = { price: m30Candles[i].high, time: m30Candles[i].time, label: `пробой ${microTop.price.toFixed(4)}` };
-                                break;
-                            }
-                        }
-                    }
-                }
-            } else if (trendDir === 'down') {
-                const microBottom = lastMicroLows[lastMicroLows.length - 1];
-                const breakLevel = lastMicroLows[lastMicroLows.length - 2].price;
-                if (microBottom.price < breakLevel) {
-                    signal1 = { price: breakLevel, time: microBottom.time, label: `пробой ${breakLevel.toFixed(4)}` };
-                    const pullbackZone = breakLevel - (breakLevel - microBottom.price) * 0.5;
-                    for (let i = microBottom.index + 1; i < m30Candles.length; i++) {
-                        if (m30Candles[i].high >= pullbackZone && m30Candles[i].high <= breakLevel * 1.001) {
-                            signal2 = { price: m30Candles[i].high, time: m30Candles[i].time, label: `откат к ${m30Candles[i].high.toFixed(4)}` };
-                            break;
-                        }
-                    }
-                    if (signal2) {
-                        for (let i = m30Candles.findIndex(c => c.time >= signal2.time) + 1; i < m30Candles.length; i++) {
-                            if (m30Candles[i].low < microBottom.price) {
-                                signal3 = { price: m30Candles[i].low, time: m30Candles[i].time, label: `пробой ${microBottom.price.toFixed(4)}` };
-                                break;
-                            }
-                        }
-                    }
-                }
-            }
-            if (!signal1) return null;
-            return { signal1, signal2: signal2 || null, signal3: signal3 || null, complete: !!(signal1 && signal2 && signal3) };
-        }
-
-        function computeEntry(slom, levels, trend) {
-            if (!slom || !slom.signal2 || !levels.target) return null;
-            const entry = slom.signal2.price;
-            let stop, take;
-            const buffer = Math.abs(slom.signal2.price - slom.signal1.price) * 0.5;
-            if (trend === 'up') {
-                stop = entry - buffer;
-                take = levels.target;
-            } else {
-                stop = entry + buffer;
-                take = levels.target;
-            }
-            const riskPerUnit = Math.abs(entry - stop);
-            const profitPerUnit = Math.abs(take - entry);
-            const rr = profitPerUnit / riskPerUnit;
-            const positionSize = MAX_RISK / riskPerUnit;
-            const potentialProfit = positionSize * profitPerUnit;
-            const potentialLoss = MAX_RISK;
-
-            const base = { entry, stop, take, rr, direction: trend, positionSize, potentialProfit, potentialLoss };
-            if (rr < 3.0) return { ...base, valid: false, reason: `R:R ${rr.toFixed(2)} < 3.0` };
-            return { ...base, valid: true, reason: `R:R = ${rr.toFixed(2)}` };
-        }
-
-        // --- Rate-limited fetch ---
-        function delay(ms) {
-            return new Promise(resolve => setTimeout(resolve, ms));
-        }
-
-        function fetchWithTimeout(url, options = {}, timeoutMs = 30000) {
-            const controller = new AbortController();
-            const timer = setTimeout(() => controller.abort(), timeoutMs);
-            return fetch(url, { ...options, signal: controller.signal })
-                .finally(() => clearTimeout(timer));
-        }
-
-        // Convert "EUR/USD" → "EURUSD"
-        function pairConcat(symbol) {
-            return symbol.replace('/', '');
-        }
-
-        // --- Twelve Data ---
-        async function fetchTwelveData(symbol, interval) {
-            const size = interval === '1h' ? 200 : 150;
-            const url = `https://api.twelvedata.com/time_series?symbol=${symbol}&interval=${interval}&outputsize=${size}&apikey=${getApiKey('twelvedata')}`;
-            const res = await fetchWithTimeout(url);
-            const data = await res.json();
-            if (data.status === 'ok' && data.values) {
-                return data.values.reverse().map(v => ({
-                    time: parseDatetime(v.datetime),
-                    open: parseFloat(v.open),
-                    high: parseFloat(v.high),
-                    low: parseFloat(v.low),
-                    close: parseFloat(v.close),
-                }));
-            }
-            if (data.code === 429) throw new Error('Rate limit (429)');
-            return [];
-        }
-
-        // --- TraderMade ---
-        async function fetchTraderMade(symbol, interval) {
-            const pair = pairConcat(symbol);
-            // interval: "1h" → hourly, "30min" → minute period=30
-            let tmInterval, tmPeriod = '';
-            if (interval === '1h') {
-                tmInterval = 'hourly';
-            } else if (interval === '30min') {
-                tmInterval = 'minute';
-                tmPeriod = '&period=30';
-            } else {
-                tmInterval = 'daily';
-            }
-            // TraderMade: hourly max 2 months, minute max 5 days
-            const now = new Date();
-            const daysBack = tmInterval === 'minute' ? 4 : 30;
-            const from = new Date(now.getTime() - daysBack * 86400000);
-            const startDate = from.toISOString().slice(0, 10);
-            const endDate = now.toISOString().slice(0, 10);
-            const url = `https://marketdata.tradermade.com/api/v1/timeseries?currency=${pair}&api_key=${getApiKey('tradermade')}&start_date=${startDate}&end_date=${endDate}&interval=${tmInterval}${tmPeriod}&format=records`;
-            const res = await fetchWithTimeout(url);
-            const data = await res.json();
-            if (data.quotes && Array.isArray(data.quotes)) {
-                return data.quotes.map(q => ({
-                    time: parseDatetime(q.date),
-                    open: parseFloat(q.open),
-                    high: parseFloat(q.high),
-                    low: parseFloat(q.low),
-                    close: parseFloat(q.close),
-                }));
-            }
-            if (data.error || (data.errors && data.errors.length > 0)) {
-                const msg = data.error || data.errors[0]?.message || 'API error';
-                if (msg.includes('rate') || msg.includes('limit') || msg.includes('429')) throw new Error('Rate limit (429)');
-                throw new Error(msg);
-            }
-            return [];
-        }
-
-        // --- Polygon.io ---
-        async function fetchPolygon(symbol, interval) {
-            const ticker = 'C:' + pairConcat(symbol);
-            // interval: "1h" → 1/hour, "30min" → 30/minute
-            let multiplier, timespan;
-            if (interval === '1h') {
-                multiplier = 1; timespan = 'hour';
-            } else if (interval === '30min') {
-                multiplier = 30; timespan = 'minute';
-            } else {
-                multiplier = 1; timespan = 'day';
-            }
-            const now = new Date();
-            const from = new Date(now.getTime() - 60 * 86400000); // 60 days back
-            const fromDate = from.toISOString().slice(0, 10);
-            const toDate = now.toISOString().slice(0, 10);
-            const url = `https://api.polygon.io/v2/aggs/ticker/${ticker}/range/${multiplier}/${timespan}/${fromDate}/${toDate}?adjusted=true&sort=asc&limit=5000&apiKey=${getApiKey('polygon')}`;
-            const res = await fetchWithTimeout(url);
-            const data = await res.json();
-            if (data.status === 'OK' && data.results) {
-                return data.results.map(r => ({
-                    time: Math.floor(r.t / 1000), // ms → sec
-                    open: r.o,
-                    high: r.h,
-                    low: r.l,
-                    close: r.c,
-                }));
-            }
-            if (data.status === 'ERROR') {
-                const msg = data.error || data.message || 'API error';
-                if (msg.includes('rate') || msg.includes('limit')) throw new Error('Rate limit (429)');
-                throw new Error(msg);
-            }
-            return [];
-        }
-
-        // --- Finnhub ---
-        async function fetchFinnhub(symbol, interval) {
-            const pair = pairConcat(symbol);
-            const fhSymbol = 'OANDA:' + pair.slice(0,3) + '_' + pair.slice(3);
-            const resolution = interval === '1h' ? '60' : interval === '30min' ? '30' : '60';
-            const to = Math.floor(Date.now() / 1000);
-            const from = to - 90 * 86400;
-            const url = `https://finnhub.io/api/v1/forex/candle?symbol=${fhSymbol}&resolution=${resolution}&from=${from}&to=${to}&token=${getApiKey('finnhub')}`;
-            const res = await fetchWithTimeout(url);
-            const data = await res.json();
-            if (data.s === 'ok' && data.c && data.c.length > 0) {
-                return data.t.map((t, i) => ({
-                    time: t, open: data.o[i], high: data.h[i], low: data.l[i], close: data.c[i],
-                }));
-            }
-            if (data.error) throw new Error(data.error);
-            return [];
-        }
-
-        // --- FCS API ---
-        async function fetchFcsApi(symbol, interval) {
-            const period = interval === '1h' ? '1h' : interval === '30min' ? '30m' : '1h';
-            const url = `https://fcsapi.com/api-v3/forex/history?symbol=${symbol}&period=${period}&access_key=${getApiKey('fcsapi')}`;
-            const res = await fetchWithTimeout(url);
-            const data = await res.json();
-            console.log('FCS API raw response:', JSON.stringify(data).substring(0, 1000));
-            console.log('FCS API keys:', Object.keys(data), 'response type:', typeof data.response, 'response value:', data.response);
-            // Check for real API errors (not "Successfully" with empty response)
-            const isError = data.code === 101 || data.code === 102 ||
-                String(data.status).toLowerCase() === 'false' || data.status === 0;
-            if (isError) {
-                throw new Error(data.msg || data.message || 'FCS API error');
-            }
-            // Try to find candle data in any top-level field
-            let candles = data.response || data.data || data.results || data.candles;
-            if (!candles) {
-                // Maybe the data itself is the array or candles are under another key
-                const candidateKeys = Object.keys(data).filter(k => !['status','msg','message','code','info','s'].includes(k));
-                for (const k of candidateKeys) {
-                    const val = data[k];
-                    if (val && (Array.isArray(val) || (typeof val === 'object' && Object.keys(val).length > 0))) {
-                        candles = val;
-                        console.log('FCS API: found data under key:', k);
-                        break;
-                    }
-                }
-            }
-            if (!candles) throw new Error('FCS API: нет данных. Ответ: ' + JSON.stringify(data).substring(0, 200));
-            if (candles && !Array.isArray(candles)) candles = Object.values(candles);
-            if (!candles || candles.length === 0) throw new Error('Нет данных от FCS API');
-            const first = candles[0];
-            console.log('FCS API first candle:', JSON.stringify(first));
-            // FCS API may use o/h/l/c or open/high/low/close
-            const oField = first.o !== undefined ? 'o' : first.open !== undefined ? 'open' : null;
-            const hField = first.h !== undefined ? 'h' : first.high !== undefined ? 'high' : null;
-            const lField = first.l !== undefined ? 'l' : first.low !== undefined ? 'low' : null;
-            const cField = first.c !== undefined ? 'c' : first.close !== undefined ? 'close' : null;
-            if (!oField) throw new Error('FCS API: неизвестный формат свечей: ' + Object.keys(first).join(','));
-            return candles.map(q => ({
-                time: parseInt(q.t) || parseDatetime(q.tm) || Math.floor(new Date(q.tm || q.time || q.date).getTime() / 1000),
-                open: parseFloat(q[oField]), high: parseFloat(q[hField]),
-                low: parseFloat(q[lField]), close: parseFloat(q[cField]),
-            }));
-        }
-
-        // --- Alpha Vantage ---
-        async function fetchAlphaVantage(symbol, interval) {
-            const parts = symbol.split('/');
-            const ivParam = interval === '30min' ? '30min' : '60min';
-            const url = `https://www.alphavantage.co/query?function=FX_INTRADAY&from_symbol=${parts[0]}&to_symbol=${parts[1]}&interval=${ivParam}&outputsize=full&apikey=${getApiKey('alphavantage')}`;
-            const res = await fetchWithTimeout(url);
-            const data = await res.json();
-            const tsKey = Object.keys(data).find(k => k.startsWith('Time Series'));
-            if (tsKey && data[tsKey]) {
-                return Object.entries(data[tsKey]).reverse().map(([dt, v]) => ({
-                    time: parseDatetime(dt),
-                    open: parseFloat(v['1. open']), high: parseFloat(v['2. high']),
-                    low: parseFloat(v['3. low']), close: parseFloat(v['4. close']),
-                }));
-            }
-            if (data['Error Message']) throw new Error(data['Error Message']);
-            if (data['Note']) throw new Error('Rate limit');
-            return [];
-        }
-
-        // --- OANDA ---
-        async function fetchOanda(symbol, interval) {
-            const parts = symbol.split('/');
-            const instrument = parts[0] + '_' + parts[1];
-            const granularity = interval === '1h' ? 'H1' : interval === '30min' ? 'M30' : 'H1';
-            const url = `https://api-fxpractice.oanda.com/v3/instruments/${instrument}/candles?granularity=${granularity}&count=500&price=M`;
-            const controller = new AbortController();
-            const timer = setTimeout(() => controller.abort(), 30000);
-            const res = await fetch(url, {
-                headers: { 'Authorization': 'Bearer ' + getApiKey('oanda') },
-                signal: controller.signal,
-            }).finally(() => clearTimeout(timer));
-            if (!res.ok) {
-                const err = await res.json().catch(() => ({}));
-                throw new Error(err.errorMessage || `OANDA error ${res.status}`);
-            }
-            const data = await res.json();
-            if (!data.candles || data.candles.length === 0) throw new Error('Нет данных от OANDA');
-            return data.candles.filter(c => c.complete !== false).map(c => ({
-                time: Math.floor(new Date(c.time).getTime() / 1000),
-                open: parseFloat(c.mid.o), high: parseFloat(c.mid.h),
-                low: parseFloat(c.mid.l), close: parseFloat(c.mid.c),
-            }));
-        }
-
-        // --- Universal fetch with retry ---
-        async function fetchTimeSeries(symbol, interval, retries = 3) {
-            const source = getDataSource();
-            const fetchFns = {
-                twelvedata: fetchTwelveData, tradermade: fetchTraderMade,
-                polygon: fetchPolygon, finnhub: fetchFinnhub,
-                fcsapi: fetchFcsApi, alphavantage: fetchAlphaVantage,
-                oanda: fetchOanda,
-            };
-            const fetchFn = fetchFns[source] || fetchTwelveData;
-            for (let attempt = 0; attempt <= retries; attempt++) {
-                try {
-                    return await fetchFn(symbol, interval);
-                } catch (err) {
-                    if (attempt < retries) {
-                        const isTimeout = err.name === 'AbortError';
-                        const isRateLimit = err.message.includes('429');
-                        const isNetwork = err.message.includes('Failed to fetch') || err.message.includes('NetworkError');
-                        if (isTimeout || isRateLimit || isNetwork) {
-                            const waitSec = isRateLimit ? 15 : 5;
-                            const reason = isTimeout ? 'Таймаут' : isRateLimit ? 'Rate limit' : 'Сеть';
-                            statusText.textContent = `${reason} — повтор через ${waitSec}с (попытка ${attempt + 2}/${retries + 1})...`;
-                            addScanLog(symbol, `${reason}: ${err.message} — повтор...`, 'warn');
-                            await delay(waitSec * 1000);
-                            continue;
-                        }
-                    }
-                    throw err;
-                }
-            }
-            return [];
-        }
-
-        // --- Analyze a single pair ---
-        function analyzePair(h1Candles, m30Candles) {
-            const result = {
-                trend: 'range', phase: '—',
-                lastImpSize: null, lastCorrSize: null,
-                reversal: false, reversalReason: '',
-                s1: false, s2: false, s3: false,
-                entry: null, rr: null,
-                // Detailed data for tooltip
-                swingHighs: [], swingLows: [],
-                swingCount: 0,
-                lastImp: null, lastCorr: null,
-                levels: {},
-                slom: null,
-                h1Count: h1Candles.length,
-                m30Count: m30Candles.length,
-            };
-
-            if (h1Candles.length < 20) return result;
-
-            const swings = findSwingPoints(h1Candles, 5);
-            result.swingCount = swings.length;
-            if (swings.length < 4) return result;
-
-            result.swingHighs = swings.filter(s => s.type === 'high').slice(-3).map(s => s.price);
-            result.swingLows = swings.filter(s => s.type === 'low').slice(-3).map(s => s.price);
-
-            result.trend = determineTrend(swings);
-            const impulses = segmentSwings(swings, result.trend);
-
-            if (impulses.length > 0) {
-                const lastSeg = impulses[impulses.length - 1];
-                result.phase = lastSeg.type === 'impulse' ? 'Импульс' : 'Коррекция';
-
-                const imps = impulses.filter(s => s.type === 'impulse');
-                const corrs = impulses.filter(s => s.type === 'correction');
-                if (imps.length > 0) {
-                    result.lastImpSize = imps[imps.length - 1].size;
-                    result.lastImp = imps[imps.length - 1];
-                }
-                if (corrs.length > 0) {
-                    result.lastCorrSize = corrs[corrs.length - 1].size;
-                    result.lastCorr = corrs[corrs.length - 1];
-                }
-
-                const rev = checkReversal(impulses);
-                result.reversal = rev.reversal;
-                result.reversalReason = rev.reason;
-            }
-
-            if (result.trend !== 'range') {
-                const levels = constructLevels(impulses, result.trend, swings);
-                result.levels = levels;
-
-                if (m30Candles.length > 20) {
-                    const slom = detectSlom(m30Candles, result.trend, levels);
-                    result.slom = slom;
-                    if (slom) {
-                        result.s1 = !!slom.signal1;
-                        result.s2 = !!slom.signal2;
-                        result.s3 = !!slom.signal3;
-
-                        if (slom.signal2) {
-                            const entry = computeEntry(slom, levels, result.trend);
-                            if (entry) {
-                                result.entry = entry;
-                                result.rr = entry.rr;
-                            }
-                        }
-                    }
-                }
-            }
-
-            result.swings = swings;
-            result.impulses = impulses;
-
-            return result;
-        }
 
         function formatMoney(val) {
             return val.toLocaleString('ru-RU', { maximumFractionDigits: 0 }) + ' ₽';
@@ -1567,11 +853,14 @@
         // --- Render mini chart in trade plan ---
         function renderMiniChart(pair) {
             const data = pairChartData[pair];
-            if (!data) return;
-
             const containerId = 'minichart-' + pair.replace('/', '-');
             const container = document.getElementById(containerId);
             if (!container) return;
+            // Server scan doesn't ship M30 candles. Show a hint instead of the inline chart.
+            if (!data || !Array.isArray(data.m30Candles) || data.m30Candles.length === 0) {
+                container.innerHTML = '<div style="padding:12px;color:#787b86;font-size:12px;">Свечной мини-график недоступен в серверном режиме — откройте полный график на отдельной вкладке.</div>';
+                return;
+            }
 
             const chart = LightweightCharts.createChart(container, {
                 width: container.clientWidth,
@@ -1954,133 +1243,26 @@
             }
         }
 
-        // --- Notifications ---
-        function requestNotificationPermission() {
-            if ('Notification' in window && Notification.permission === 'default') {
-                Notification.requestPermission();
-            }
-        }
-
-        function sendNotification(pair, direction, rr) {
-            const key = `${pair}:${direction}`;
-            if (notifiedEntries.has(key)) return;
-            notifiedEntries.add(key);
-
-            const dir = direction === 'up' ? 'LONG ↑' : 'SHORT ↓';
-            const title = `${pair} — ${dir}`;
-            const body = `Сигнал входа! R:R = ${rr.toFixed(2)}`;
-
-            // Browser notification
-            if ('Notification' in window && Notification.permission === 'granted') {
-                new Notification(title, { body, icon: '📊' });
-            }
-
-            // Audio beep
-            playBeep();
-        }
-
-        function sendTelegramNotification(pair, result) {
-            const settings = JSON.parse(localStorage.getItem('telegramSettings') || '{}');
-            if (!settings.botToken || !settings.chatId) {
-                addScanLog(pair, 'Telegram: не настроен botToken или chatId — уведомление не отправлено', 'error');
-                return;
-            }
-
-            const e = result.entry;
-            const dir = e.direction === 'up' ? 'LONG ↑' : 'SHORT ↓';
-            const fp = (v) => v >= 10 ? v.toFixed(2) : v.toFixed(5);
-
-            const chartUrl = `https://trader.kachestvobiz-ai.ru/index.html?pair=${encodeURIComponent(pair)}&tf=30&analyze=1&dir=${e.direction}&entry=${e.entry}&stop=${e.stop}&take=${e.take}&rr=${e.rr.toFixed(2)}`;
-
-            const text = [
-                `📊 *${pair} — ${dir}*`,
-                ``,
-                `Тренд: ${result.trend === 'up' ? 'Восходящий' : 'Нисходящий'}`,
-                `Вход: \`${fp(e.entry)}\``,
-                `Стоп: \`${fp(e.stop)}\``,
-                `Тейк: \`${fp(e.take)}\``,
-                `R:R: *1:${e.rr.toFixed(1)}*`,
-                `Размер: ${e.positionSize.toFixed(2)}`,
-                `Риск: ${e.potentialLoss.toFixed(0)}₽ → Прибыль: ${e.potentialProfit.toFixed(0)}₽`,
-                ``,
-                `[📈 Открыть график](${chartUrl})`,
-            ].join('\n');
-
-            fetch(`https://api.telegram.org/bot${settings.botToken}/sendMessage`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    chat_id: settings.chatId,
-                    text,
-                    parse_mode: 'Markdown',
-                }),
-            }).then(resp => {
-                if (resp.ok) {
-                    addScanLog(pair, `Telegram: уведомление отправлено (${dir})`, 'tg');
-                } else {
-                    resp.json().then(data => {
-                        addScanLog(pair, `Telegram ошибка ${resp.status}: ${data.description || 'Unknown'}`, 'error');
-                    }).catch(() => {
-                        addScanLog(pair, `Telegram ошибка: HTTP ${resp.status}`, 'error');
-                    });
-                }
-            }).catch(err => {
-                addScanLog(pair, `Telegram сбой: ${err.message}`, 'error');
-            });
-        }
-
-        function playBeep() {
-            try {
-                const ctx = new (window.AudioContext || window.webkitAudioContext)();
-                const osc = ctx.createOscillator();
-                const gain = ctx.createGain();
-                osc.connect(gain);
-                gain.connect(ctx.destination);
-                osc.frequency.value = 880;
-                osc.type = 'sine';
-                gain.gain.value = 0.3;
-                osc.start();
-                osc.stop(ctx.currentTime + 0.15);
-                setTimeout(() => {
-                    const osc2 = ctx.createOscillator();
-                    const gain2 = ctx.createGain();
-                    osc2.connect(gain2);
-                    gain2.connect(ctx.destination);
-                    osc2.frequency.value = 1100;
-                    osc2.type = 'sine';
-                    gain2.gain.value = 0.3;
-                    osc2.start();
-                    osc2.stop(ctx.currentTime + 0.2);
-                }, 180);
-            } catch {}
-        }
-
-        // --- Scanner cycle ---
+        // --- Server-side scan state (mirrored to UI) ---
         const pairResults = {};
-        const pairChartData = loadChartDataCache();
+        const scanHistory = {};       // pair → [{time, trend, valid, verdict, rr, entry}]
+        const pairChartData = {};     // pair → snapshot for chart link (filled from server lastResults)
         const miniCharts = {};
+
+        function getAdminSecret() {
+            return localStorage.getItem('scannerAdminSecret') || '';
+        }
+
+        function adminHeaders() {
+            const sec = getAdminSecret();
+            return sec ? { 'X-Admin-Secret': sec } : {};
+        }
 
         function initTableRows() {
             const pairs = getWatchlist();
-            // Restore last results from history + cached chart data
-            for (const pair of pairs) {
-                if (!pairResults[pair] && scanHistory[pair] && scanHistory[pair].length > 0) {
-                    const lastEntry = scanHistory[pair][scanHistory[pair].length - 1];
-                    const cached = pairChartData[pair];
-                    pairResults[pair] = {
-                        trend: lastEntry.trend || 'range', phase: '—',
-                        lastImpSize: null, lastCorrSize: null,
-                        reversal: false, s1: false, s2: false, s3: false,
-                        entry: cached ? cached.entry : null,
-                        rr: lastEntry.rr || null,
-                        scanTime: lastEntry.time,
-                        swingHighs: [], swingLows: [], swingCount: 0,
-                        lastImp: null, lastCorr: null,
-                        levels: cached ? cached.levels : {},
-                        slom: cached ? cached.slom : null,
-                        h1Count: 0, m30Count: 0,
-                    };
-                }
+            if (!pairs.length) {
+                scannerBody.innerHTML = '<tr><td colspan="12" style="text-align:center;color:#787b86;padding:20px;">Серверный watchlist пуст — задайте WATCHLIST в env</td></tr>';
+                return;
             }
             scannerBody.innerHTML = pairs.map(pair => {
                 const result = pairResults[pair] || {
@@ -2089,7 +1271,8 @@
                     reversal: false, s1: false, s2: false, s3: false,
                     entry: null, rr: null,
                 };
-                return renderRow(pair, result, false);
+                const isScanning = !!(serverScanState && serverScanState.isScanning && serverScanState.currentPair === pair);
+                return renderRow(pair, result, isScanning);
             }).join('');
         }
 
@@ -2106,160 +1289,205 @@
             mainRow.outerHTML = renderRow(pair, result, isScanning);
         }
 
-        async function runScannerCycle() {
-            if (!scanning) return;
-
-            const pairs = getWatchlist();
-            const source = getDataSource();
-            const rateDelay = DATA_SOURCES[source].rateDelay;
-            const cycleStart = Date.now();
-            notifiedEntries.clear();
-
-            addScanLog('', `Сканирование начато: ${pairs.length} пар [${DATA_SOURCES[source].label}]`, 'info');
-
-            // Check API key
-            if (!getApiKey(source)) {
-                addScanLog('', `Ошибка: не указан API ключ для ${DATA_SOURCES[source].label}`, 'error');
-                statusText.textContent = `Ошибка: не указан API ключ для ${DATA_SOURCES[source].label}`;
-                scanning = false;
-                scanBtn.disabled = false;
-                scanBtn.textContent = 'Сканировать';
-                scanBtn.classList.remove('scanning');
-                statusDot.classList.remove('active');
-                return;
-            }
-
-            for (let i = 0; i < pairs.length; i++) {
-                if (scanAbort) return;
-
-                const pair = pairs[i];
-                statusText.textContent = `[${DATA_SOURCES[source].label}] ${pair} (${i + 1}/${pairs.length})...`;
-
-                // Show scanning indicator
-                updateRowForPair(pair, pairResults[pair] || {
-                    trend: 'range', phase: '—',
-                    lastImpSize: null, lastCorrSize: null,
-                    reversal: false, s1: false, s2: false, s3: false,
-                    entry: null, rr: null,
-                }, true);
-
-                try {
-                    // Fetch H1
-                    const h1 = await fetchTimeSeries(pair, '1h');
-                    if (scanAbort) return;
-
-                    // Wait before next API call
-                    await delay(rateDelay);
-                    if (scanAbort) return;
-
-                    // Fetch M30
-                    const m30 = await fetchTimeSeries(pair, '30min');
-                    if (scanAbort) return;
-
-                    // Analyze
-                    console.log(`[${pair}] H1 candles: ${h1.length}, M30 candles: ${m30.length}`);
-                    const result = analyzePair(h1, m30);
-                    console.log(`[${pair}] Analysis:`, JSON.stringify({
-                        trend: result.trend, phase: result.phase,
-                        reversal: result.reversal, s1: result.s1, s2: result.s2, s3: result.s3,
-                        hasEntry: !!result.entry, rr: result.rr,
-                        entryDetail: result.entry ? { valid: result.entry.valid, direction: result.entry.direction, reason: result.entry.reason } : null
-                    }));
-                    result.scanTime = new Date().toISOString();
-                    pairResults[pair] = result;
-
-                    // Cache chart data for mini chart
-                    if (result.entry && result.entry.valid && result.swings) {
-                        pairChartData[pair] = {
-                            m30Candles: m30,
-                            swings: result.swings,
-                            impulses: result.impulses,
-                            trend: result.trend,
-                            levels: result.levels,
-                            slom: result.slom,
-                            entry: result.entry,
-                        };
-                    } else {
-                        delete pairChartData[pair];
-                    }
-
-                    // Save to history
-                    if (!scanHistory[pair]) scanHistory[pair] = [];
-                    const e2 = result.entry;
-                    scanHistory[pair].push({
-                        time: result.scanTime,
-                        trend: result.trend,
-                        verdict: e2 ? (e2.valid ? 'Вход возможен' : e2.reason) : (result.trend === 'range' ? 'Нет тренда' : 'Нет сигнала'),
-                        valid: !!(e2 && e2.valid),
-                        entry: e2 ? e2.entry : null,
-                        rr: result.rr,
-                    });
-                    if (scanHistory[pair].length > 20) scanHistory[pair] = scanHistory[pair].slice(-20);
-                    saveHistory();
-
-                    // Update row
-                    updateRowForPair(pair, result, false);
-
-                    // Log result and notify
-                    if (result.entry && result.entry.valid) {
-                        addScanLog(pair, `Сигнал найден! ${result.entry.direction === 'up' ? 'LONG' : 'SHORT'}, R:R = ${result.rr.toFixed(2)}`, 'success');
-                        sendNotification(pair, result.entry.direction, result.rr);
-                        sendTelegramNotification(pair, result);
-                    } else if (result.entry && !result.entry.valid) {
-                        addScanLog(pair, `Сигнал есть, но ${result.entry.reason} — уведомление не отправлено`, 'warn');
-                    } else if (result.trend === 'range') {
-                        addScanLog(pair, 'Нет тренда (range)', 'info');
-                    } else {
-                        addScanLog(pair, `Тренд: ${result.trend}, но нет сигнала входа`, 'info');
-                    }
-
-                } catch (err) {
-                    console.warn(`Scan error for ${pair}:`, err);
-                    addScanLog(pair, `Ошибка: ${err.message}`, 'error');
-                    statusText.textContent = `Ошибка ${pair}: ${err.message}`;
-                    updateRowForPair(pair, pairResults[pair] || {
-                        trend: 'range', phase: '—',
-                        lastImpSize: null, lastCorrSize: null,
-                        reversal: false, s1: false, s2: false, s3: false,
-                        entry: null, rr: null,
-                    }, false);
-                }
-
-                // Wait between pairs (except after last)
-                if (i < pairs.length - 1 && !scanAbort) {
-                    await delay(rateDelay);
-                }
-            }
-
-            if (scanAbort) return;
-
-            saveChartDataCache();
-
-            const elapsed = ((Date.now() - cycleStart) / 1000).toFixed(0);
-            const finishTime = new Date().toLocaleTimeString('ru-RU', { timeZone: 'Europe/Moscow' });
-            addScanLog('', `Сканирование завершено за ${elapsed}с`, 'info');
-            statusText.textContent = `Анализ завершён в ${finishTime} (${elapsed}с)`;
-            cycleInfo.textContent = '';
-            scanning = false;
-            scanBtn.disabled = false;
-            scanBtn.textContent = 'Сканировать';
-            scanBtn.classList.remove('scanning');
-            statusDot.classList.remove('active');
+        function formatMsk(iso) {
+            if (!iso) return '—';
+            const d = new Date(iso);
+            return d.toLocaleDateString('ru-RU', {day:'2-digit', month:'2-digit', timeZone:'Europe/Moscow'})
+                + ' ' + d.toLocaleTimeString('ru-RU', {timeZone:'Europe/Moscow'});
         }
 
-        // --- Scan once (exposed globally) ---
-        window.scanOnce = function() {
-            if (scanning) return;
-            scanning = true;
-            scanAbort = false;
+        function formatRemaining(targetIso) {
+            if (!targetIso) return '—';
+            const ms = new Date(targetIso).getTime() - Date.now();
+            if (ms <= 0) return 'сейчас';
+            const totalSec = Math.floor(ms / 1000);
+            const h = Math.floor(totalSec / 3600);
+            const m = Math.floor((totalSec % 3600) / 60);
+            return h > 0 ? `${h}ч ${m}м` : `${m}м`;
+        }
+
+        function renderServerStatus() {
+            if (!serverScanMeta) {
+                serverStatusInfo.textContent = 'Загружаю состояние сервера…';
+                return;
+            }
+            const m = serverScanMeta;
+            const s = serverScanState || {};
+            const sourceLabel = (DATA_SOURCES[m.dataSource] && DATA_SOURCES[m.dataSource].label) || m.dataSource;
+            const watchlistStr = (m.watchlist || []).join(', ') || '—';
+            let scanInfo;
+            if (s.isScanning) {
+                scanInfo = `Сканирует <b>${s.currentPair || '…'}</b> (${s.currentIndex}/${s.totalPairs})`;
+            } else if (s.finishedAt) {
+                scanInfo = `Последний скан: <b>${formatMsk(s.finishedAt)}</b>`;
+            } else {
+                scanInfo = 'Скан ещё не запускался';
+            }
+            const nextInfo = s.nextScanAt && !s.isScanning ? `<span style="color:#787b86">• Следующий через ${formatRemaining(s.nextScanAt)}</span>` : '';
+            serverStatusInfo.innerHTML = [
+                `<b>${sourceLabel}</b>`,
+                `${m.watchlist.length} пар: ${watchlistStr}`,
+                `Окно ${m.scheduleFrom}–${m.scheduleTo} МСК`,
+                `Интервал ${m.intervalHours}ч`,
+                scanInfo,
+                nextInfo,
+            ].filter(Boolean).join(' • ');
+        }
+
+        function isPlanOrHistoryOpen(pair) {
+            const slug = pair.replace('/', '-');
+            const plan = document.getElementById('plan-' + slug);
+            const hist = document.getElementById('history-' + slug);
+            return (plan && !plan.classList.contains('hidden'))
+                || (hist && !hist.classList.contains('hidden'));
+        }
+
+        function applyScanState(data) {
+            const prevScanning = serverScanState && serverScanState.isScanning;
+            const prevPair = serverScanState && serverScanState.currentPair;
+            const prevResultsSig = {};
+            for (const p of serverWatchlist) {
+                prevResultsSig[p] = pairResults[p] ? pairResults[p].scanTime || '' : '';
+            }
+
+            serverScanState = data.scanState || null;
+            serverScanMeta = {
+                watchlist: data.watchlist || [],
+                blacklist: data.blacklist || [],
+                dataSource: data.dataSource,
+                intervalHours: data.intervalHours,
+                scheduleFrom: data.scheduleFrom,
+                scheduleTo: data.scheduleTo,
+                deposit: data.deposit,
+                riskPct: data.riskPct,
+                minRr: data.minRr,
+            };
+            DEPOSIT = data.deposit || DEPOSIT;
+            RISK_PCT = data.riskPct || RISK_PCT;
+            MAX_RISK = DEPOSIT * RISK_PCT;
+
+            const watchlistChanged = JSON.stringify(serverWatchlist) !== JSON.stringify(data.watchlist || []);
+            serverWatchlist = data.watchlist || [];
+
+            // Merge server-side results.
+            for (const pair of serverWatchlist) {
+                if (data.results && data.results[pair]) {
+                    pairResults[pair] = data.results[pair];
+                    if (data.results[pair].levels || data.results[pair].slom) {
+                        pairChartData[pair] = {
+                            entry: data.results[pair].entry,
+                            levels: data.results[pair].levels,
+                            slom: data.results[pair].slom,
+                            trend: data.results[pair].trend,
+                        };
+                    }
+                }
+                if (data.history && data.history[pair]) {
+                    scanHistory[pair] = data.history[pair];
+                }
+            }
+
+            if (watchlistChanged) {
+                initTableRows();
+            } else {
+                const newPair = serverScanState && serverScanState.currentPair;
+                const newScanning = serverScanState && serverScanState.isScanning;
+                for (const pair of serverWatchlist) {
+                    const wasMarker = (prevScanning && prevPair === pair);
+                    const isMarker = (newScanning && newPair === pair);
+                    const newSig = pairResults[pair] ? pairResults[pair].scanTime || '' : '';
+                    const sigChanged = newSig !== prevResultsSig[pair];
+                    const markerChanged = wasMarker !== isMarker;
+                    if (!sigChanged && !markerChanged) continue;
+                    // Skip row rebuild if user has plan/history expanded — would close it.
+                    if (isPlanOrHistoryOpen(pair) && !markerChanged) continue;
+                    updateRowForPair(pair, pairResults[pair] || {
+                        trend: 'range', phase: '—', s1:false, s2:false, s3:false,
+                        entry: null, rr: null,
+                    }, isMarker);
+                }
+            }
+
+            renderServerStatus();
+
+            // Status bar / button state.
+            if (serverScanState && serverScanState.isScanning) {
+                statusDot.classList.add('active');
+                statusText.textContent = `Сервер сканирует ${serverScanState.currentPair || ''} (${serverScanState.currentIndex}/${serverScanState.totalPairs})`;
+                scanBtn.disabled = true;
+                scanBtn.textContent = 'Сканирование…';
+                scanBtn.classList.add('scanning');
+            } else {
+                statusDot.classList.remove('active');
+                if (serverScanState && serverScanState.finishedAt) {
+                    statusText.textContent = `Последний скан: ${formatMsk(serverScanState.finishedAt)}`;
+                } else {
+                    statusText.textContent = 'Ждём первый серверный скан';
+                }
+                scanBtn.disabled = false;
+                scanBtn.textContent = 'Запустить скан сейчас';
+                scanBtn.classList.remove('scanning');
+            }
+            cycleInfo.textContent = serverScanState && serverScanState.nextScanAt && !serverScanState.isScanning
+                ? `Следующий через ${formatRemaining(serverScanState.nextScanAt)}`
+                : '';
+        }
+
+        async function loadServerScanState() {
+            try {
+                const res = await fetch('/api/scan-state', { headers: adminHeaders() });
+                if (res.status === 401) {
+                    statusText.textContent = 'Нужен admin secret сканера';
+                    const sec = prompt('Введите admin secret сканера (сохранится в браузере):') || '';
+                    if (sec) {
+                        localStorage.setItem('scannerAdminSecret', sec);
+                        return loadServerScanState();
+                    }
+                    return;
+                }
+                if (!res.ok) throw new Error(`HTTP ${res.status}`);
+                const data = await res.json();
+                if (!data.success) throw new Error(data.error || 'unknown error');
+                applyScanState(data);
+            } catch (err) {
+                addScanLog('', `Не удалось получить состояние сервера: ${err.message}`, 'error');
+            }
+        }
+
+        window.triggerServerScan = async function() {
+            if (scanBtn.disabled) return;
             scanBtn.disabled = true;
-            scanBtn.textContent = 'Сканирование...';
-            scanBtn.classList.add('scanning');
-            statusDot.classList.add('active');
-            requestNotificationPermission();
-            initTableRows();
-            runScannerCycle();
+            scanBtn.textContent = 'Запускаю…';
+            try {
+                const res = await fetch('/api/scan-trigger', { method: 'POST', headers: adminHeaders() });
+                const data = await res.json();
+                if (!data.success) {
+                    addScanLog('', `Триггер скана: ${data.error}`, 'warn');
+                } else {
+                    addScanLog('', 'Триггер скана отправлен — сервер начнёт цикл', 'info');
+                }
+            } catch (err) {
+                addScanLog('', `Триггер скана сбой: ${err.message}`, 'error');
+            }
+            // Refresh in 1 second to pick up scanning state.
+            setTimeout(loadServerScanState, 1000);
         };
+
+        function startPolling() {
+            stopPolling();
+            pollTimerId = setInterval(loadServerScanState, POLL_INTERVAL_MS);
+        }
+        function stopPolling() {
+            if (pollTimerId) { clearInterval(pollTimerId); pollTimerId = null; }
+        }
+        document.addEventListener('visibilitychange', () => {
+            if (document.visibilityState === 'visible') {
+                loadServerScanState();
+                startPolling();
+            } else {
+                stopPolling();
+            }
+        });
 
         // --- Health check (executor + MT5) ---
         function escapeHtml(s) {
@@ -2334,191 +1562,6 @@
             if (e.key === 'Escape') closeHealthModal();
         });
 
-        // --- Auto-scan scheduling ---
-        const SCHEDULE_STORAGE_KEY = 'scannerSchedule';
-        const autoScanToggle = document.getElementById('autoScanToggle');
-        const scheduleFrom = document.getElementById('scheduleFrom');
-        const scheduleTo = document.getElementById('scheduleTo');
-        const scheduleInterval = document.getElementById('scheduleInterval');
-        const autoScanStatus = document.getElementById('autoScanStatus');
-
-        let autoScanTimerId = null;
-        let countdownTimerId = null;
-        let nextScanTime = null;
-
-        function loadScheduleSettings() {
-            try {
-                const saved = JSON.parse(localStorage.getItem(SCHEDULE_STORAGE_KEY));
-                if (saved && typeof saved === 'object') {
-                    scheduleFrom.value = saved.from ?? 8;
-                    scheduleTo.value = saved.to ?? 20;
-                    scheduleInterval.value = saved.interval ?? 1;
-                    if (saved.enabled) {
-                        autoScanToggle.checked = true;
-                        startAutoScan();
-                    }
-                }
-            } catch {}
-        }
-
-        window.saveScheduleSettings = function() {
-            const settings = {
-                from: parseInt(scheduleFrom.value) || 8,
-                to: parseInt(scheduleTo.value) || 20,
-                interval: parseInt(scheduleInterval.value) || 1,
-                enabled: autoScanToggle.checked,
-            };
-            localStorage.setItem(SCHEDULE_STORAGE_KEY, JSON.stringify(settings));
-            // Restart auto-scan if active to apply new settings
-            if (autoScanToggle.checked) {
-                stopAutoScan();
-                startAutoScan();
-            }
-        };
-
-        function getMoscowHour() {
-            const now = new Date();
-            // UTC+3 for Moscow
-            const mskOffset = 3 * 60;
-            const utcMinutes = now.getUTCHours() * 60 + now.getUTCMinutes();
-            const mskMinutes = utcMinutes + mskOffset;
-            return Math.floor(((mskMinutes % 1440) + 1440) % 1440 / 60);
-        }
-
-        function isInTimeWindow() {
-            const from = parseInt(scheduleFrom.value) || 8;
-            const to = parseInt(scheduleTo.value) || 20;
-            const hour = getMoscowHour();
-            if (from <= to) {
-                return hour >= from && hour < to;
-            } else {
-                // Overnight window, e.g. 22-06
-                return hour >= from || hour < to;
-            }
-        }
-
-        function getNextScanDelay() {
-            const intervalHours = parseInt(scheduleInterval.value) || 1;
-            return intervalHours * 60 * 60 * 1000;
-        }
-
-        function scheduleNextScan() {
-            if (!autoScanToggle.checked) return;
-
-            const delayMs = getNextScanDelay();
-            nextScanTime = Date.now() + delayMs;
-
-            autoScanTimerId = setTimeout(() => {
-                if (!autoScanToggle.checked) return;
-                if (isInTimeWindow()) {
-                    if (!scanning) {
-                        addScanLog('', 'Авто-скан: запуск по расписанию', 'info');
-                        scanOnce();
-                        // Wait for scan to finish, then schedule next
-                        waitForScanEnd().then(() => scheduleNextScan());
-                    } else {
-                        addScanLog('', 'Авто-скан: пропуск — сканирование уже идёт', 'warn');
-                        scheduleNextScan();
-                    }
-                } else {
-                    addScanLog('', 'Авто-скан: пропуск — вне временного окна', 'info');
-                    updateAutoStatus('Вне окна');
-                    scheduleNextScan();
-                }
-            }, delayMs);
-
-            startCountdown();
-        }
-
-        function waitForScanEnd() {
-            return new Promise(resolve => {
-                const check = setInterval(() => {
-                    if (!scanning) {
-                        clearInterval(check);
-                        resolve();
-                    }
-                }, 1000);
-            });
-        }
-
-        function startCountdown() {
-            if (countdownTimerId) clearInterval(countdownTimerId);
-            countdownTimerId = setInterval(() => {
-                if (!nextScanTime || !autoScanToggle.checked) {
-                    clearInterval(countdownTimerId);
-                    return;
-                }
-                const remaining = Math.max(0, nextScanTime - Date.now());
-                const totalSec = Math.floor(remaining / 1000);
-                const h = Math.floor(totalSec / 3600);
-                const m = Math.floor((totalSec % 3600) / 60);
-                const s = totalSec % 60;
-                const pad = n => String(n).padStart(2, '0');
-
-                let timeStr;
-                if (h > 0) {
-                    timeStr = `${h}:${pad(m)}:${pad(s)}`;
-                } else {
-                    timeStr = `${m}:${pad(s)}`;
-                }
-
-                const inWindow = isInTimeWindow();
-                if (scanning) {
-                    updateAutoStatus('Сканирует...');
-                } else if (!inWindow) {
-                    updateAutoStatus(`Вне окна · след. ${timeStr}`);
-                } else {
-                    updateAutoStatus(`След. скан: ${timeStr}`);
-                }
-                cycleInfo.innerHTML = autoScanToggle.checked
-                    ? `<span class="countdown-text">${timeStr}</span>`
-                    : '';
-            }, 1000);
-        }
-
-        function updateAutoStatus(text) {
-            autoScanStatus.textContent = text;
-        }
-
-        function startAutoScan() {
-            updateAutoStatus('Активно');
-            // If in time window, run scan immediately
-            if (isInTimeWindow() && !scanning) {
-                scanOnce();
-                waitForScanEnd().then(() => scheduleNextScan());
-            } else {
-                if (!isInTimeWindow()) {
-                    updateAutoStatus('Вне окна');
-                }
-                scheduleNextScan();
-            }
-        }
-
-        function stopAutoScan() {
-            if (autoScanTimerId) {
-                clearTimeout(autoScanTimerId);
-                autoScanTimerId = null;
-            }
-            if (countdownTimerId) {
-                clearInterval(countdownTimerId);
-                countdownTimerId = null;
-            }
-            nextScanTime = null;
-            cycleInfo.textContent = '';
-            updateAutoStatus('Выкл');
-        }
-
-        window.toggleAutoScan = function() {
-            saveScheduleSettings();
-            if (autoScanToggle.checked) {
-                startAutoScan();
-            } else {
-                stopAutoScan();
-            }
-        };
-
-        // Load schedule settings on page load
-        loadScheduleSettings();
 
         // --- Tooltip ---
         const tooltip = document.getElementById('pairTooltip');
@@ -2894,15 +1937,9 @@
         };
 
         // --- Init ---
-        function syncSourceUI() {
-            dataSourceSelect.value = loadDataSource();
-            apiKeyInput.value = getApiKey(loadDataSource());
-        }
-        syncSourceUI();
-        // Sync when returning from settings page
-        window.addEventListener('focus', syncSourceUI);
-        populateSelectors();
         initTableRows();
+        loadServerScanState();
+        startPolling();
     })();
     </script>
 </body>

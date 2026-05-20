@@ -62,6 +62,34 @@ const RATE_DELAYS = {
     finnhub: 1500, fcsapi: 21000, alphavantage: 15000, oanda: 500,
 };
 
+// ─── Live scan state (for UI sync) ───
+const SCAN_HISTORY_MAX = 20;
+const lastResults = Object.create(null);          // pair → result with scanTime
+const scanHistoryByPair = Object.create(null);    // pair → [{time, trend, rr, entry, valid, reason}, ...]
+const scanState = {
+    isScanning: false,
+    currentPair: null,
+    currentIndex: 0,
+    totalPairs: 0,
+    startedAt: null,
+    finishedAt: null,
+    nextScanAt: null,
+    skipReason: null,
+    lastError: null,
+};
+
+let interruptDelayFn = null;
+function interruptibleDelay(ms) {
+    return new Promise(resolve => {
+        const timer = setTimeout(() => { interruptDelayFn = null; resolve(); }, ms);
+        interruptDelayFn = () => {
+            clearTimeout(timer);
+            interruptDelayFn = null;
+            resolve();
+        };
+    });
+}
+
 // ─── Helpers ───
 function delay(ms) {
     return new Promise(resolve => setTimeout(resolve, ms));
@@ -518,11 +546,20 @@ function analyzePair(h1Candles, m30Candles, pc) {
         s1: false, s2: false, s3: false,
         entry: null, rr: null,
         h1Count: h1Candles.length, m30Count: m30Candles.length,
+        swingHighs: [], swingLows: [],
+        swingCount: 0,
+        lastImp: null, lastCorr: null,
+        lastImpSize: null, lastCorrSize: null,
+        levels: {},
+        slom: null,
     };
 
     if (h1Candles.length < pc.min_h1_candles) return result;
 
     const swings = findSwingPoints(h1Candles, pc.h1_swing_lookback);
+    result.swingCount = swings.length;
+    result.swingHighs = swings.filter(s => s.type === 'high').slice(-3).map(s => s.price);
+    result.swingLows = swings.filter(s => s.type === 'low').slice(-3).map(s => s.price);
     if (swings.length < pc.min_swings_required) return result;
 
     result.trend = determineTrend(swings);
@@ -530,7 +567,17 @@ function analyzePair(h1Candles, m30Candles, pc) {
 
     if (impulses.length > 0) {
         const lastSeg = impulses[impulses.length - 1];
-        result.phase = lastSeg.type === 'impulse' ? 'Impulse' : 'Correction';
+        result.phase = lastSeg.type === 'impulse' ? 'Импульс' : 'Коррекция';
+        const lastImpSeg = [...impulses].reverse().find(s => s.type === 'impulse');
+        const lastCorrSeg = [...impulses].reverse().find(s => s.type === 'correction');
+        if (lastImpSeg) {
+            result.lastImp = { startPrice: lastImpSeg.startPrice, endPrice: lastImpSeg.endPrice };
+            result.lastImpSize = lastImpSeg.size;
+        }
+        if (lastCorrSeg) {
+            result.lastCorr = { startPrice: lastCorrSeg.startPrice, endPrice: lastCorrSeg.endPrice };
+            result.lastCorrSize = lastCorrSeg.size;
+        }
         const rev = checkReversal(impulses);
         result.reversal = rev.reversal;
         result.reversalReason = rev.reason;
@@ -543,6 +590,11 @@ function analyzePair(h1Candles, m30Candles, pc) {
         if (m30Candles.length > pc.min_h1_candles) {
             const slom = detectSlom(m30Candles, result.trend, levels, pc);
             if (slom) {
+                result.slom = {
+                    signal1: slom.signal1 ? { price: slom.signal1.price } : null,
+                    signal2: slom.signal2 ? { price: slom.signal2.price } : null,
+                    signal3: slom.signal3 ? { price: slom.signal3.price } : null,
+                };
                 result.s1 = !!slom.signal1;
                 result.s2 = !!slom.signal2;
                 result.s3 = !!slom.signal3;
@@ -863,7 +915,9 @@ async function runScanCycle() {
     if (Array.isArray(pcInitial.allowed_weekdays) && pcInitial.allowed_weekdays.length > 0) {
         const dow = getMoscowWeekday();
         if (!pcInitial.allowed_weekdays.includes(dow)) {
-            log(`Skipping scan: MSK weekday ${dow} not in allowed_weekdays ${JSON.stringify(pcInitial.allowed_weekdays)}`);
+            const msg = `MSK weekday ${dow} not in allowed_weekdays ${JSON.stringify(pcInitial.allowed_weekdays)}`;
+            log(`Skipping scan: ${msg}`);
+            scanState.skipReason = msg;
             return;
         }
     }
@@ -871,12 +925,23 @@ async function runScanCycle() {
     if (Array.isArray(pcInitial.allowed_hours_msk) && pcInitial.allowed_hours_msk.length > 0) {
         const h = getMoscowHour();
         if (!pcInitial.allowed_hours_msk.includes(h)) {
-            log(`Skipping scan: MSK hour ${h} not in allowed_hours_msk ${JSON.stringify(pcInitial.allowed_hours_msk)}`);
+            const msg = `MSK hour ${h} not in allowed_hours_msk ${JSON.stringify(pcInitial.allowed_hours_msk)}`;
+            log(`Skipping scan: ${msg}`);
+            scanState.skipReason = msg;
             return;
         }
     }
 
     log(`=== Scan started: ${pairs.length} pairs [${CONFIG.dataSource}]${skipped.length ? ` (blacklisted: ${skipped.join(',')})` : ''} ===`);
+
+    scanState.isScanning = true;
+    scanState.startedAt = new Date().toISOString();
+    scanState.finishedAt = null;
+    scanState.totalPairs = pairs.length;
+    scanState.currentIndex = 0;
+    scanState.currentPair = null;
+    scanState.skipReason = null;
+    scanState.lastError = null;
 
     // Fetch actual account balance from MT5
     const acc = await fetchAccountBalance();
@@ -906,7 +971,13 @@ async function runScanCycle() {
 
     for (let i = 0; i < pairs.length; i++) {
         const pair = pairs[i];
+        scanState.currentPair = pair;
+        scanState.currentIndex = i + 1;
         log(`  Scanning ${pair} (${i + 1}/${pairs.length})...`);
+
+        const scanTime = new Date().toISOString();
+        let result = null;
+        let errMsg = null;
 
         try {
             const h1 = await fetchTimeSeries(pair, '1h');
@@ -914,7 +985,7 @@ async function runScanCycle() {
             const m30 = await fetchTimeSeries(pair, '30min');
 
             const pc = pendingConfig.get();
-            const result = analyzePair(h1, m30, pc);
+            result = analyzePair(h1, m30, pc);
             log(`  ${pair}: trend=${result.trend} phase=${result.phase} H1=${result.h1Count} M30=${result.m30Count} S1=${result.s1} S2=${result.s2} S3=${result.s3}`);
 
             if (result.entry && result.entry.valid) {
@@ -929,11 +1000,43 @@ async function runScanCycle() {
                 log(`  ${pair}: trend ${result.trend} but no entry signal`);
             }
         } catch (err) {
+            errMsg = err.message;
             log(`  ${pair}: ERROR — ${err.message}`);
+        }
+
+        // Publish state for UI even on error.
+        lastResults[pair] = result
+            ? { ...result, scanTime, error: null }
+            : { trend: 'range', phase: '—', s1: false, s2: false, s3: false,
+                entry: null, rr: null, h1Count: 0, m30Count: 0,
+                scanTime, error: errMsg };
+
+        if (!scanHistoryByPair[pair]) scanHistoryByPair[pair] = [];
+        const valid = !!(result && result.entry && result.entry.valid);
+        let verdict;
+        if (errMsg) verdict = `Ошибка: ${errMsg}`;
+        else if (valid) verdict = 'Вход возможен';
+        else if (result && result.entry) verdict = result.entry.reason;
+        else if (result && result.trend === 'range') verdict = 'Нет тренда';
+        else verdict = 'Нет сигнала';
+        scanHistoryByPair[pair].push({
+            time: scanTime,
+            trend: result ? result.trend : 'range',
+            rr: result && result.rr ? result.rr : null,
+            entry: result && result.entry ? result.entry.entry : null,
+            valid,
+            verdict,
+        });
+        if (scanHistoryByPair[pair].length > SCAN_HISTORY_MAX) {
+            scanHistoryByPair[pair] = scanHistoryByPair[pair].slice(-SCAN_HISTORY_MAX);
         }
 
         if (i < pairs.length - 1) await delay(rateDelay);
     }
+
+    scanState.currentPair = null;
+    scanState.isScanning = false;
+    scanState.finishedAt = new Date().toISOString();
 
     log(`=== Scan complete ===`);
 }
@@ -993,15 +1096,20 @@ async function schedulerLoop() {
             try {
                 await runScanCycle();
             } catch (err) {
+                scanState.lastError = err.message;
+                scanState.isScanning = false;
                 log(`Scan cycle error: ${err.message}`);
             }
         } else {
-            log(`Moscow time ~${moscowHour}:00 — outside window (${CONFIG.scheduleFrom}-${CONFIG.scheduleTo}), skipping`);
+            const msg = `outside window (${CONFIG.scheduleFrom}-${CONFIG.scheduleTo})`;
+            scanState.skipReason = msg;
+            log(`Moscow time ~${moscowHour}:00 — ${msg}, skipping`);
         }
 
         const delayMs = getNextScanDelayMs();
+        scanState.nextScanAt = new Date(Date.now() + delayMs).toISOString();
         log(`Next scan in ${formatMs(delayMs)}`);
-        await delay(delayMs);
+        await interruptibleDelay(delayMs);
     }
 }
 
@@ -1529,6 +1637,51 @@ const apiServer = http.createServer(async (req, res) => {
             if (!requireAdmin(req)) return reply(res, 401, { success: false, error: 'admin secret required' });
             const qs = parsed.search || '';
             return proxyExecutor(req, res, `/journal${qs}`);
+        }
+
+        // ─── Scan state (UI sync with server scanner) ───
+        if (p === '/api/scan-state' && req.method === 'GET') {
+            if (!requireAdmin(req)) return reply(res, 401, { success: false, error: 'admin secret required' });
+            const pc = pendingConfig.get();
+            const blacklist = new Set(pc.pair_blacklist || []);
+            const results = {};
+            const history = {};
+            for (const pair of CONFIG.watchlist) {
+                if (lastResults[pair]) results[pair] = lastResults[pair];
+                if (scanHistoryByPair[pair]) history[pair] = scanHistoryByPair[pair];
+            }
+            return reply(res, 200, {
+                success: true,
+                scanState,
+                watchlist: CONFIG.watchlist,
+                blacklist: Array.from(blacklist),
+                dataSource: CONFIG.dataSource,
+                intervalHours: CONFIG.intervalHours,
+                scheduleFrom: CONFIG.scheduleFrom,
+                scheduleTo: CONFIG.scheduleTo,
+                deposit: CONFIG.deposit,
+                riskPct: CONFIG.riskPct,
+                minRr: pc.min_rr,
+                results,
+                history,
+            });
+        }
+        if (p === '/api/scan-history' && req.method === 'GET') {
+            if (!requireAdmin(req)) return reply(res, 401, { success: false, error: 'admin secret required' });
+            const pair = parsed.query.pair;
+            if (!pair) return reply(res, 400, { success: false, error: 'pair query param required' });
+            return reply(res, 200, { success: true, pair, history: scanHistoryByPair[pair] || [] });
+        }
+        if (p === '/api/scan-trigger' && req.method === 'POST') {
+            if (!requireAdmin(req)) return reply(res, 401, { success: false, error: 'admin secret required' });
+            if (scanState.isScanning) {
+                return reply(res, 409, { success: false, error: 'scan already in progress' });
+            }
+            if (!interruptDelayFn) {
+                return reply(res, 409, { success: false, error: 'scheduler not waiting' });
+            }
+            interruptDelayFn();
+            return reply(res, 200, { success: true, message: 'scan triggered' });
         }
 
         // ─── AI Agent endpoints ───
