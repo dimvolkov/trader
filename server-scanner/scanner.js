@@ -4,6 +4,7 @@
 const pendingConfig = require('./pending_config');
 const auth = require('./auth');
 const aiAgent = require('./ai-agent');
+const candleStore = require('./candle_store');
 auth.init();
 
 // ─── Configuration from environment variables ───
@@ -332,7 +333,11 @@ async function fetchTimeSeries(symbol, interval, retries = 3) {
     const fetchFn = FETCH_FNS[CONFIG.dataSource] || fetchTwelveData;
     for (let attempt = 0; attempt <= retries; attempt++) {
         try {
-            return await fetchFn(symbol, interval);
+            const candles = await fetchFn(symbol, interval);
+            if (candles && candles.length) {
+                candleStore.save(symbol, interval, candles, CONFIG.dataSource);
+            }
+            return candles;
         } catch (err) {
             if (attempt < retries) {
                 const isTimeout = err.name === 'AbortError';
@@ -1787,6 +1792,25 @@ const apiServer = http.createServer(async (req, res) => {
             const pair = parsed.query.pair;
             if (!pair) return reply(res, 400, { success: false, error: 'pair query param required' });
             return reply(res, 200, { success: true, pair, history: scanHistoryByPair[pair] || [] });
+        }
+
+        // ─── Candle history (SQLite) ───
+        if (p === '/api/candles' && req.method === 'GET') {
+            if (!requireAdmin(req)) return reply(res, 401, { success: false, error: 'admin secret required' });
+            const q = parsed.query;
+            if (!q.pair) return reply(res, 400, { success: false, error: 'pair query param required' });
+            const rows = candleStore.query({
+                symbol:    q.pair,
+                timeframe: q.tf || q.timeframe,
+                fromTime:  q.from ? parseInt(q.from, 10) : undefined,
+                toTime:    q.to   ? parseInt(q.to,   10) : undefined,
+                limit:     q.limit,
+            });
+            return reply(res, 200, { success: true, pair: q.pair, timeframe: q.tf || q.timeframe || null, count: rows.length, candles: rows });
+        }
+        if (p === '/api/candles/stats' && req.method === 'GET') {
+            if (!requireAdmin(req)) return reply(res, 401, { success: false, error: 'admin secret required' });
+            return reply(res, 200, { success: true, ...candleStore.stats() });
         }
         if (p === '/api/scan-trigger' && req.method === 'POST') {
             if (!requireAdmin(req)) return reply(res, 401, { success: false, error: 'admin secret required' });
