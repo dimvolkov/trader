@@ -1812,6 +1812,67 @@ const apiServer = http.createServer(async (req, res) => {
             if (!requireAdmin(req)) return reply(res, 401, { success: false, error: 'admin secret required' });
             return reply(res, 200, { success: true, ...candleStore.stats() });
         }
+        if (p === '/api/candles/analyze' && req.method === 'GET') {
+            if (!requireAdmin(req)) return reply(res, 401, { success: false, error: 'admin secret required' });
+            const q = parsed.query;
+            if (!q.pair) return reply(res, 400, { success: false, error: 'pair query param required' });
+            const tf = q.tf || q.timeframe || '1h';
+            const limit = Math.min(Math.max(parseInt(q.limit, 10) || 500, 50), 10000);
+            const candles = candleStore.query({ symbol: q.pair, timeframe: tf, limit });
+            const pc = pendingConfig.get();
+            const lookback = tf === '1h' ? pc.h1_swing_lookback : pc.m30_swing_lookback;
+
+            const analysis = {
+                trend: 'range', phase: '—',
+                swings: [], impulses: [], levels: {},
+                reversal: { reversal: false, reason: '' },
+                slom: null, h1Levels: null,
+                lookback,
+            };
+
+            if (candles.length >= pc.min_h1_candles) {
+                analysis.swings = findSwingPoints(candles, lookback);
+                if (analysis.swings.length >= pc.min_swings_required) {
+                    analysis.trend = determineTrend(analysis.swings);
+                    if (analysis.trend !== 'range') {
+                        analysis.impulses = segmentSwings(analysis.swings, analysis.trend);
+                        analysis.levels  = constructLevels(analysis.impulses, analysis.trend, analysis.swings);
+                        analysis.reversal = checkReversal(analysis.impulses);
+                        const last = analysis.impulses[analysis.impulses.length - 1];
+                        if (last) analysis.phase = last.type === 'impulse' ? 'Импульс' : 'Коррекция';
+                    }
+                }
+            }
+
+            // For M30 view, derive H1 trend+levels from SQLite and detect SLOM on the displayed M30 series.
+            if (tf === '30min') {
+                const h1c = candleStore.query({ symbol: q.pair, timeframe: '1h', limit: 500 });
+                if (h1c.length >= pc.min_h1_candles) {
+                    const h1Swings = findSwingPoints(h1c, pc.h1_swing_lookback);
+                    if (h1Swings.length >= pc.min_swings_required) {
+                        const h1Trend = determineTrend(h1Swings);
+                        if (h1Trend !== 'range') {
+                            const h1Imp = segmentSwings(h1Swings, h1Trend);
+                            analysis.h1Levels = constructLevels(h1Imp, h1Trend, h1Swings);
+                            const slom = detectSlom(candles, h1Trend, analysis.h1Levels, pc);
+                            if (slom) analysis.slom = { h1Trend, ...slom };
+                        }
+                    }
+                }
+            }
+
+            return reply(res, 200, {
+                success: true,
+                pair: q.pair, tf, count: candles.length,
+                candles, analysis,
+                config: {
+                    h1_swing_lookback:  pc.h1_swing_lookback,
+                    m30_swing_lookback: pc.m30_swing_lookback,
+                    min_swings_required: pc.min_swings_required,
+                    min_h1_candles:      pc.min_h1_candles,
+                },
+            });
+        }
         if (p === '/api/scan-trigger' && req.method === 'POST') {
             if (!requireAdmin(req)) return reply(res, 401, { success: false, error: 'admin secret required' });
             if (scanState.isScanning) {

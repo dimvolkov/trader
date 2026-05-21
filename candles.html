@@ -190,7 +190,21 @@
                 <input type="checkbox" id="grid" checked>
                 Сетка
             </label>
+            <label class="filter-checkbox" title="Тренды, swing-точки и уровни поверх графика">
+                <input type="checkbox" id="analysisOn" checked>
+                Анализ
+            </label>
+            <div class="filter-group">
+                <label class="filter-label" for="refresh">Обновление</label>
+                <select class="filter-select" id="refresh">
+                    <option value="0">Off</option>
+                    <option value="30">30 с</option>
+                    <option value="60" selected>1 мин</option>
+                    <option value="300">5 мин</option>
+                </select>
+            </div>
             <button class="btn" id="reloadBtn" onclick="loadCandles()">Загрузить</button>
+            <span id="refreshIndicator" style="font-size:11px;color:#787b86;align-self:center;"></span>
         </div>
 
         <div class="status-line" id="statusLine" style="display:none;"></div>
@@ -295,11 +309,30 @@
     // ─── Chart ───
     let chart = null;
     let series = null;
+    let overlaySeries = [];     // line series used for impulse/correction segments
+    let overlayPriceLines = []; // price lines (target / impulse start / impulse end)
+    let savedTimeRange = null;  // preserve zoom across refetches
 
     function destroyChart() {
         if (chart) {
+            try { savedTimeRange = chart.timeScale().getVisibleLogicalRange(); } catch (_) {}
             try { chart.remove(); } catch (_) {}
             chart = null; series = null;
+            overlaySeries = []; overlayPriceLines = [];
+        }
+    }
+
+    function clearOverlays() {
+        for (const s of overlaySeries) {
+            try { chart.removeSeries(s); } catch (_) {}
+        }
+        overlaySeries = [];
+        for (const pl of overlayPriceLines) {
+            try { series.removePriceLine(pl); } catch (_) {}
+        }
+        overlayPriceLines = [];
+        if (series) {
+            try { series.setMarkers([]); } catch (_) {}
         }
     }
 
@@ -342,7 +375,7 @@
         }
     }
 
-    function renderChart(candles, viewType, gridOn, pair) {
+    function renderChart(candles, viewType, gridOn, pair, restoreRange) {
         buildChart(viewType, gridOn);
         const digits = digitsFor(pair);
         series.applyOptions({ priceFormat: { type: 'price', precision: digits, minMove: Math.pow(10, -digits) } });
@@ -354,7 +387,126 @@
                 time: c.time, open: c.open, high: c.high, low: c.low, close: c.close,
             })));
         }
-        chart.timeScale().fitContent();
+        if (restoreRange && savedTimeRange) {
+            try { chart.timeScale().setVisibleLogicalRange(savedTimeRange); } catch (_) {
+                chart.timeScale().fitContent();
+            }
+        } else {
+            chart.timeScale().fitContent();
+        }
+    }
+
+    // ─── Analysis overlay (swings, impulses, levels, SLOM) ───
+    function snapToCandleTime(t, candleTimes) {
+        if (!candleTimes.length) return t;
+        let best = candleTimes[0], bestDiff = Math.abs(t - candleTimes[0]);
+        for (const ct of candleTimes) {
+            const diff = Math.abs(t - ct);
+            if (diff < bestDiff) { best = ct; bestDiff = diff; }
+        }
+        return best;
+    }
+
+    function renderAnalysis(analysis, candles, pair) {
+        if (!chart || !series || !analysis) return;
+        clearOverlays();
+
+        const digits = digitsFor(pair);
+        const fp = (v) => v >= 10 ? v.toFixed(2) : v.toFixed(digits);
+        const candleTimes = candles.map(c => c.time);
+
+        // 1) Swing markers
+        const markers = [];
+        for (const sw of (analysis.swings || [])) {
+            markers.push({
+                time: snapToCandleTime(sw.time, candleTimes),
+                position: sw.type === 'high' ? 'aboveBar' : 'belowBar',
+                color: '#ffeb3b',
+                shape: sw.type === 'high' ? 'arrowDown' : 'arrowUp',
+                size: 1,
+                text: fp(sw.price),
+            });
+        }
+
+        // 2) SLOM signal markers (M30 only)
+        if (analysis.slom) {
+            const s = analysis.slom;
+            if (s.signal1 && s.signal1.time) {
+                markers.push({ time: snapToCandleTime(s.signal1.time, candleTimes),
+                    position: 'belowBar', color: '#2962ff', shape: 'circle', size: 2, text: 'S1' });
+            }
+            if (s.signal2 && s.signal2.time) {
+                markers.push({ time: snapToCandleTime(s.signal2.time, candleTimes),
+                    position: 'belowBar', color: '#ff9800', shape: 'circle', size: 2, text: 'S2' });
+            }
+            if (s.signal3 && s.signal3.time) {
+                markers.push({ time: snapToCandleTime(s.signal3.time, candleTimes),
+                    position: 'belowBar', color: '#00e676', shape: 'circle', size: 2, text: 'S3' });
+            }
+        }
+
+        markers.sort((a, b) => a.time - b.time);
+        // Dedupe identical (time, text) markers (snap may collide).
+        const seen = new Set();
+        const deduped = [];
+        for (const m of markers) {
+            const k = `${m.time}|${m.text}|${m.position}`;
+            if (seen.has(k)) continue;
+            seen.add(k); deduped.push(m);
+        }
+        series.setMarkers(deduped);
+
+        // 3) Impulse / correction line segments
+        for (const seg of (analysis.impulses || [])) {
+            const isImpulse = seg.type === 'impulse';
+            const segSeries = chart.addLineSeries({
+                color: isImpulse ? '#2962ff' : '#ff9800',
+                lineWidth: isImpulse ? 3 : 2,
+                lineStyle: isImpulse ? LightweightCharts.LineStyle.Solid : LightweightCharts.LineStyle.Dashed,
+                lastValueVisible: false,
+                priceLineVisible: false,
+                crosshairMarkerVisible: false,
+            });
+            segSeries.setData([
+                { time: snapToCandleTime(seg.startTime, candleTimes), value: seg.startPrice },
+                { time: snapToCandleTime(seg.endTime,   candleTimes), value: seg.endPrice   },
+            ]);
+            overlaySeries.push(segSeries);
+        }
+
+        // 4) Horizontal price levels (target / impulse boundaries)
+        const lv = analysis.levels || {};
+        if (Number.isFinite(lv.target)) {
+            overlayPriceLines.push(series.createPriceLine({
+                price: lv.target, color: '#ffeb3b',
+                lineStyle: LightweightCharts.LineStyle.Dashed,
+                lineWidth: 2, axisLabelVisible: true, title: 'Target',
+            }));
+        }
+        if (Number.isFinite(lv.impulseEnd)) {
+            overlayPriceLines.push(series.createPriceLine({
+                price: lv.impulseEnd, color: '#2962ff',
+                lineStyle: LightweightCharts.LineStyle.Solid,
+                lineWidth: 1, axisLabelVisible: true, title: 'Imp.end',
+            }));
+        }
+        if (Number.isFinite(lv.impulseStart)) {
+            overlayPriceLines.push(series.createPriceLine({
+                price: lv.impulseStart, color: '#787b86',
+                lineStyle: LightweightCharts.LineStyle.Dotted,
+                lineWidth: 1, axisLabelVisible: true, title: 'Imp.start',
+            }));
+        }
+
+        // 5) H1 levels overlay when viewing M30 (helpful context).
+        const h1 = analysis.h1Levels;
+        if (h1 && Number.isFinite(h1.target)) {
+            overlayPriceLines.push(series.createPriceLine({
+                price: h1.target, color: 'rgba(255, 235, 59, 0.5)',
+                lineStyle: LightweightCharts.LineStyle.Dashed,
+                lineWidth: 1, axisLabelVisible: true, title: 'H1 Target',
+            }));
+        }
     }
 
     function renderTable(candles, pair) {
@@ -382,23 +534,50 @@
         tbody.innerHTML = rows.join('') || '<tr><td colspan="7" class="muted" style="text-align:center;padding:20px;">Нет данных</td></tr>';
     }
 
-    function setStatus(pair, tf, count, first, last) {
+    function setStatus(pair, tf, count, first, last, analysis) {
         const el = document.getElementById('statusLine');
         if (!count) { el.style.display = 'none'; return; }
         el.style.display = 'flex';
-        el.innerHTML = `
-            <span>Пара: <b>${pair}</b></span>
-            <span>ТФ: <b>${tf}</b></span>
-            <span>Свечей: <b>${count}</b></span>
-            <span>Период: <b>${fmtTimeMsk(first)}</b> → <b>${fmtTimeMsk(last)}</b> MSK</span>
-        `;
+        const parts = [
+            `<span>Пара: <b>${pair}</b></span>`,
+            `<span>ТФ: <b>${tf}</b></span>`,
+            `<span>Свечей: <b>${count}</b></span>`,
+            `<span>Период: <b>${fmtTimeMsk(first)}</b> → <b>${fmtTimeMsk(last)}</b> MSK</span>`,
+        ];
+        if (analysis) {
+            const t = analysis.trend;
+            const trendStr = t === 'up' ? '<span style="color:#26a69a">↑ восходящий</span>'
+                          : t === 'down' ? '<span style="color:#ef5350">↓ нисходящий</span>'
+                          : '<span class="muted">боковик</span>';
+            parts.push(`<span>Тренд: <b>${trendStr}</b></span>`);
+            if (analysis.phase && analysis.phase !== '—') parts.push(`<span>Фаза: <b>${analysis.phase}</b></span>`);
+            if (analysis.reversal && analysis.reversal.reversal) {
+                parts.push(`<span style="color:#ff9800">⚠ Разворот: ${analysis.reversal.reason}</span>`);
+            }
+            if (analysis.slom) {
+                const s = analysis.slom;
+                const sigBits = [];
+                if (s.signal1) sigBits.push('<span style="color:#2962ff">S1</span>');
+                if (s.signal2) sigBits.push('<span style="color:#ff9800">S2</span>');
+                if (s.signal3) sigBits.push('<span style="color:#00e676">S3</span>');
+                if (sigBits.length) parts.push(`<span>SLOM: ${sigBits.join(' ')}</span>`);
+            }
+        }
+        el.innerHTML = parts.join('');
     }
 
-    async function loadCandles() {
+    let inFlight = false;
+    let lastFetchedAt = 0;
+
+    async function loadCandles(opts) {
+        const isPoll = !!(opts && opts.poll);
         if (!adminSecret()) {
             showError('Не задан admin secret. Перейди в <a href="settings.html" style="color:#2962ff">настройки</a>, введи его и сохрани.');
+            stopPolling();
             return;
         }
+        if (inFlight) return;
+        inFlight = true;
         showError('');
 
         const pair = document.getElementById('pair').value;
@@ -406,25 +585,29 @@
         const viewType = document.getElementById('viewType').value;
         const limit = parseInt(document.getElementById('limit').value, 10) || 500;
         const gridOn = document.getElementById('grid').checked;
+        const analysisOn = document.getElementById('analysisOn').checked;
 
-        if (!pair) { showError('Не выбрана пара'); return; }
+        if (!pair) { showError('Не выбрана пара'); inFlight = false; return; }
         localStorage.setItem('candlesLastPair', pair);
         localStorage.setItem('candlesLastTf', tf);
         localStorage.setItem('candlesLastView', viewType);
         localStorage.setItem('candlesLastLimit', String(limit));
         localStorage.setItem('candlesLastGrid', gridOn ? '1' : '0');
+        localStorage.setItem('candlesLastAnalysis', analysisOn ? '1' : '0');
 
         const btn = document.getElementById('reloadBtn');
-        btn.disabled = true; btn.textContent = 'Загрузка…';
+        if (!isPoll) { btn.disabled = true; btn.textContent = 'Загрузка…'; }
 
         try {
+            const endpoint = analysisOn ? '/api/candles/analyze' : '/api/candles';
             const qs = new URLSearchParams({ pair, tf, limit: String(limit) }).toString();
-            const r = await fetch('/api/candles?' + qs, {
+            const r = await fetch(endpoint + '?' + qs, {
                 headers: { 'X-Admin-Secret': adminSecret() },
             });
             if (!r.ok) {
                 if (r.status === 401) {
                     showError('Admin secret неверный. <a href="settings.html" style="color:#2962ff">Поправить</a>.');
+                    stopPolling();
                     return;
                 }
                 throw new Error(`HTTP ${r.status}`);
@@ -433,6 +616,7 @@
             if (!data.success) throw new Error(data.error || 'unknown error');
 
             const candles = data.candles || [];
+            const analysis = data.analysis || null;
             const tableWrap = document.getElementById('tableWrap');
             const chartWrap = document.getElementById('chartWrap');
             const emptyBox  = document.getElementById('errorOrEmpty');
@@ -447,7 +631,7 @@
             }
             emptyBox.innerHTML = '';
 
-            setStatus(pair, tf, candles.length, candles[0].time, candles[candles.length - 1].time);
+            setStatus(pair, tf, candles.length, candles[0].time, candles[candles.length - 1].time, analysis);
 
             if (viewType === 'table') {
                 destroyChart();
@@ -457,13 +641,55 @@
             } else {
                 tableWrap.style.display = 'none';
                 chartWrap.style.display = '';
-                renderChart(candles, viewType, gridOn, pair);
+                // Preserve zoom on polling refreshes.
+                renderChart(candles, viewType, gridOn, pair, isPoll);
+                if (analysisOn && analysis) renderAnalysis(analysis, candles, pair);
             }
+            lastFetchedAt = Date.now();
+            updateRefreshIndicator();
         } catch (err) {
             showError('Ошибка загрузки: ' + err.message);
         } finally {
-            btn.disabled = false; btn.textContent = 'Загрузить';
+            inFlight = false;
+            if (!isPoll) { btn.disabled = false; btn.textContent = 'Загрузить'; }
         }
+    }
+
+    // ─── Realtime polling ───
+    let pollTimer = null;
+    let indicatorTimer = null;
+
+    function stopPolling() {
+        if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+    }
+    function startPolling(intervalSec) {
+        stopPolling();
+        if (!intervalSec || intervalSec <= 0) {
+            document.getElementById('refreshIndicator').textContent = '';
+            return;
+        }
+        pollTimer = setInterval(() => loadCandles({ poll: true }), intervalSec * 1000);
+    }
+    function updateRefreshIndicator() {
+        const el = document.getElementById('refreshIndicator');
+        if (!lastFetchedAt) { el.textContent = ''; return; }
+        const sec = Math.max(0, Math.round((Date.now() - lastFetchedAt) / 1000));
+        const refresh = parseInt(document.getElementById('refreshIndicator').dataset.interval || '0', 10);
+        el.textContent = refresh > 0
+            ? `обновлено ${sec} с назад · авто каждые ${refresh} с`
+            : `обновлено ${sec} с назад`;
+    }
+    if (!indicatorTimer) {
+        indicatorTimer = setInterval(updateRefreshIndicator, 1000);
+    }
+
+    function applyRefreshFromSelect() {
+        const sel = document.getElementById('refresh');
+        const sec = parseInt(sel.value, 10) || 0;
+        localStorage.setItem('candlesLastRefresh', String(sec));
+        document.getElementById('refreshIndicator').dataset.interval = String(sec);
+        startPolling(sec);
+        updateRefreshIndicator();
     }
 
     // ─── Init ───
@@ -478,14 +704,19 @@
         if (lim) document.getElementById('limit').value = lim;
         const gr = localStorage.getItem('candlesLastGrid');
         if (gr !== null) document.getElementById('grid').checked = gr === '1';
+        const an = localStorage.getItem('candlesLastAnalysis');
+        if (an !== null) document.getElementById('analysisOn').checked = an === '1';
+        const rf = localStorage.getItem('candlesLastRefresh');
+        if (rf !== null) document.getElementById('refresh').value = rf;
 
-        // Re-render on toggles (grid / view type) without re-fetching when possible.
         document.getElementById('grid').addEventListener('change', () => {
             if (document.getElementById('viewType').value !== 'table') loadCandles();
         });
-        document.getElementById('viewType').addEventListener('change', loadCandles);
-        document.getElementById('pair').addEventListener('change', loadCandles);
-        document.getElementById('tf').addEventListener('change', loadCandles);
+        document.getElementById('analysisOn').addEventListener('change', () => loadCandles());
+        document.getElementById('viewType').addEventListener('change', () => loadCandles());
+        document.getElementById('pair').addEventListener('change', () => { savedTimeRange = null; loadCandles(); });
+        document.getElementById('tf').addEventListener('change', () => { savedTimeRange = null; loadCandles(); });
+        document.getElementById('refresh').addEventListener('change', applyRefreshFromSelect);
 
         window.addEventListener('resize', () => {
             if (chart) {
@@ -494,7 +725,15 @@
             }
         });
 
-        loadCandles();
+        // Pause polling when tab is hidden, resume on focus.
+        document.addEventListener('visibilitychange', () => {
+            const sec = parseInt(document.getElementById('refresh').value, 10) || 0;
+            if (document.hidden) stopPolling();
+            else if (sec > 0) startPolling(sec);
+        });
+
+        await loadCandles();
+        applyRefreshFromSelect();
     })();
     </script>
 </body>
