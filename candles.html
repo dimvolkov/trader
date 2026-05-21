@@ -1,0 +1,501 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>История свечей — Forex</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            background: #131722;
+            color: #d1d4dc;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            min-height: 100vh;
+        }
+        .header {
+            display: flex; align-items: center; justify-content: space-between;
+            padding: 12px 20px;
+            background: #1e222d;
+            border-bottom: 1px solid #2a2e39;
+        }
+        .header-left { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
+        .header-left h1 { font-size: 18px; font-weight: 700; color: #fff; }
+        .header-left a { color: #2962ff; text-decoration: none; font-size: 13px; }
+        .header-left a:hover { text-decoration: underline; }
+        .content { max-width: 1600px; margin: 0 auto; padding: 16px 20px; }
+
+        .filters {
+            background: #1e222d;
+            border: 1px solid #2a2e39;
+            border-radius: 6px;
+            padding: 12px 14px;
+            margin-bottom: 14px;
+            display: flex; flex-wrap: wrap; gap: 12px; align-items: end;
+        }
+        .filter-group { display: flex; flex-direction: column; gap: 4px; }
+        .filter-label { font-size: 11px; color: #787b86; text-transform: uppercase; }
+        .filter-input, .filter-select {
+            background: #2a2e39; color: #fff;
+            border: 1px solid #363a45;
+            padding: 6px 10px;
+            border-radius: 4px;
+            font-size: 13px;
+            font-family: monospace;
+            outline: none;
+            min-width: 120px;
+        }
+        .filter-input:focus, .filter-select:focus { border-color: #2962ff; }
+        .filter-checkbox {
+            display: flex; align-items: center; gap: 6px;
+            padding: 6px 10px;
+            background: #2a2e39;
+            border: 1px solid #363a45;
+            border-radius: 4px;
+            font-size: 13px;
+            cursor: pointer;
+            user-select: none;
+            height: 32px;
+        }
+        .filter-checkbox input { cursor: pointer; }
+        .btn {
+            background: #2962ff; color: #fff;
+            border: none;
+            padding: 7px 16px;
+            border-radius: 4px;
+            font-size: 13px;
+            cursor: pointer;
+            font-weight: 600;
+            height: 32px;
+        }
+        .btn:hover { background: #1e54e0; }
+        .btn:disabled { background: #363a45; cursor: not-allowed; }
+
+        .error {
+            background: rgba(239, 83, 80, 0.1);
+            border: 1px solid #ef5350;
+            color: #ef5350;
+            padding: 10px 14px;
+            border-radius: 6px;
+            margin-bottom: 14px;
+            font-size: 13px;
+        }
+
+        .status-line {
+            display: flex; flex-wrap: wrap; gap: 16px;
+            background: #1e222d;
+            border: 1px solid #2a2e39;
+            border-radius: 6px;
+            padding: 8px 14px;
+            margin-bottom: 14px;
+            font-size: 12px;
+            color: #787b86;
+        }
+        .status-line b { color: #d1d4dc; font-weight: 600; }
+
+        .chart-wrap {
+            background: #1e222d;
+            border: 1px solid #2a2e39;
+            border-radius: 6px;
+            padding: 8px;
+        }
+        #chart { width: 100%; height: 600px; }
+
+        .table-wrap {
+            background: #1e222d;
+            border: 1px solid #2a2e39;
+            border-radius: 6px;
+            overflow: auto;
+            max-height: 70vh;
+        }
+        table.ohlc {
+            width: 100%;
+            border-collapse: collapse;
+            font-family: monospace;
+            font-size: 13px;
+        }
+        table.ohlc thead { position: sticky; top: 0; background: #161a25; z-index: 1; }
+        table.ohlc th {
+            text-align: right;
+            color: #787b86;
+            font-weight: 600;
+            padding: 8px 12px;
+            border-bottom: 1px solid #2a2e39;
+            font-size: 11px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        table.ohlc th:first-child { text-align: left; }
+        table.ohlc td {
+            text-align: right;
+            padding: 6px 12px;
+            border-bottom: 1px solid #1a1e2a;
+        }
+        table.ohlc td:first-child { text-align: left; color: #d1d4dc; }
+        table.ohlc tbody tr:hover { background: #232733; }
+        .up   { color: #26a69a; }
+        .down { color: #ef5350; }
+        .muted { color: #787b86; }
+
+        .empty {
+            text-align: center;
+            padding: 60px 20px;
+            color: #787b86;
+            font-size: 14px;
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <div class="header-left">
+            <h1>История свечей</h1>
+            <a href="index.html">&larr; График</a>
+            <a href="scanner.html">Сканер</a>
+            <a href="journal.html">Журнал</a>
+            <a href="strategy.html">Стратегии</a>
+            <a href="ai-agent.html">AI-агент</a>
+            <a href="settings.html">&#9881; Настройки</a>
+        </div>
+    </div>
+
+    <div class="content">
+        <div id="errorBox"></div>
+
+        <div class="filters">
+            <div class="filter-group">
+                <label class="filter-label" for="pair">Пара</label>
+                <select class="filter-select" id="pair"></select>
+            </div>
+            <div class="filter-group">
+                <label class="filter-label" for="tf">Таймфрейм</label>
+                <select class="filter-select" id="tf">
+                    <option value="1h">1h</option>
+                    <option value="30min">30min</option>
+                </select>
+            </div>
+            <div class="filter-group">
+                <label class="filter-label" for="viewType">Формат</label>
+                <select class="filter-select" id="viewType">
+                    <option value="candle">Свечи</option>
+                    <option value="bar">Бары (OHLC)</option>
+                    <option value="line">Линия (close)</option>
+                    <option value="area">Область (close)</option>
+                    <option value="table">Таблица</option>
+                </select>
+            </div>
+            <div class="filter-group">
+                <label class="filter-label" for="limit">Свечей</label>
+                <input type="number" class="filter-input" id="limit" value="500" min="10" max="10000" step="50">
+            </div>
+            <label class="filter-checkbox" title="Показать сетку на графике">
+                <input type="checkbox" id="grid" checked>
+                Сетка
+            </label>
+            <button class="btn" id="reloadBtn" onclick="loadCandles()">Загрузить</button>
+        </div>
+
+        <div class="status-line" id="statusLine" style="display:none;"></div>
+
+        <div id="errorOrEmpty"></div>
+        <div class="chart-wrap" id="chartWrap"><div id="chart"></div></div>
+        <div class="table-wrap" id="tableWrap" style="display:none;">
+            <table class="ohlc" id="ohlcTable">
+                <thead>
+                    <tr>
+                        <th>Время (MSK)</th>
+                        <th>Open</th>
+                        <th>High</th>
+                        <th>Low</th>
+                        <th>Close</th>
+                        <th>Изм.</th>
+                        <th>Источник</th>
+                    </tr>
+                </thead>
+                <tbody></tbody>
+            </table>
+        </div>
+    </div>
+
+    <script src="lightweight-charts.js"></script>
+    <script>
+    const DEFAULT_WATCHLIST = ['EUR/USD','GBP/USD','USD/JPY','USD/CHF'];
+
+    function adminSecret() {
+        return localStorage.getItem('scannerAdminSecret') || '';
+    }
+    function showError(msg) {
+        document.getElementById('errorBox').innerHTML = msg
+            ? `<div class="error">${msg}</div>` : '';
+    }
+
+    function fmtTimeMsk(unixSec) {
+        if (!unixSec) return '—';
+        // unix seconds → MSK string
+        const d = new Date(unixSec * 1000 + 3 * 3600 * 1000);
+        const pad = n => String(n).padStart(2, '0');
+        return `${d.getUTCFullYear()}-${pad(d.getUTCMonth()+1)}-${pad(d.getUTCDate())} `
+             + `${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}`;
+    }
+    function digitsFor(pair) {
+        return (pair || '').includes('JPY') ? 3 : 5;
+    }
+    function fmtNum(v, d) {
+        if (v === null || v === undefined || !isFinite(v)) return '—';
+        return v.toFixed(d);
+    }
+
+    // ─── Pair selector population ───
+    async function loadWatchlist() {
+        const sel = document.getElementById('pair');
+        sel.innerHTML = '';
+        let pairs = [];
+
+        // Try scan-state first (gives the active watchlist).
+        try {
+            if (adminSecret()) {
+                const r = await fetch('/api/scan-state', {
+                    headers: { 'X-Admin-Secret': adminSecret() },
+                });
+                if (r.ok) {
+                    const data = await r.json();
+                    if (Array.isArray(data.watchlist)) pairs = data.watchlist;
+                }
+            }
+        } catch (_) {}
+
+        // Fallback: candles/stats — pairs we already have data for.
+        if (pairs.length === 0) {
+            try {
+                if (adminSecret()) {
+                    const r = await fetch('/api/candles/stats', {
+                        headers: { 'X-Admin-Secret': adminSecret() },
+                    });
+                    if (r.ok) {
+                        const data = await r.json();
+                        if (Array.isArray(data.series)) {
+                            pairs = [...new Set(data.series.map(s => s.symbol))];
+                        }
+                    }
+                }
+            } catch (_) {}
+        }
+
+        if (pairs.length === 0) pairs = DEFAULT_WATCHLIST;
+
+        for (const p of pairs) {
+            const opt = document.createElement('option');
+            opt.value = p; opt.textContent = p;
+            sel.appendChild(opt);
+        }
+
+        // Restore last selection.
+        const saved = localStorage.getItem('candlesLastPair');
+        if (saved && pairs.includes(saved)) sel.value = saved;
+    }
+
+    // ─── Chart ───
+    let chart = null;
+    let series = null;
+
+    function destroyChart() {
+        if (chart) {
+            try { chart.remove(); } catch (_) {}
+            chart = null; series = null;
+        }
+    }
+
+    function buildChart(viewType, gridOn) {
+        destroyChart();
+        const container = document.getElementById('chart');
+        container.innerHTML = '';
+        chart = LightweightCharts.createChart(container, {
+            width: container.clientWidth,
+            height: container.clientHeight || 600,
+            layout: { background: { color: '#131722' }, textColor: '#d1d4dc' },
+            grid: {
+                vertLines: { color: gridOn ? '#2a2e39' : 'rgba(0,0,0,0)' },
+                horzLines: { color: gridOn ? '#2a2e39' : 'rgba(0,0,0,0)' },
+            },
+            crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
+            rightPriceScale: { borderColor: '#2a2e39' },
+            timeScale:       { borderColor: '#2a2e39', timeVisible: true, secondsVisible: false },
+        });
+
+        if (viewType === 'bar') {
+            series = chart.addBarSeries({
+                upColor: '#26a69a', downColor: '#ef5350', thinBars: true,
+            });
+        } else if (viewType === 'line') {
+            series = chart.addLineSeries({ color: '#2962ff', lineWidth: 2 });
+        } else if (viewType === 'area') {
+            series = chart.addAreaSeries({
+                lineColor: '#2962ff',
+                topColor: 'rgba(41,98,255,0.4)',
+                bottomColor: 'rgba(41,98,255,0)',
+                lineWidth: 2,
+            });
+        } else {
+            series = chart.addCandlestickSeries({
+                upColor: '#26a69a', downColor: '#ef5350',
+                borderUpColor: '#26a69a', borderDownColor: '#ef5350',
+                wickUpColor: '#26a69a', wickDownColor: '#ef5350',
+            });
+        }
+    }
+
+    function renderChart(candles, viewType, gridOn, pair) {
+        buildChart(viewType, gridOn);
+        const digits = digitsFor(pair);
+        series.applyOptions({ priceFormat: { type: 'price', precision: digits, minMove: Math.pow(10, -digits) } });
+
+        if (viewType === 'line' || viewType === 'area') {
+            series.setData(candles.map(c => ({ time: c.time, value: c.close })));
+        } else {
+            series.setData(candles.map(c => ({
+                time: c.time, open: c.open, high: c.high, low: c.low, close: c.close,
+            })));
+        }
+        chart.timeScale().fitContent();
+    }
+
+    function renderTable(candles, pair) {
+        const tbody = document.querySelector('#ohlcTable tbody');
+        const digits = digitsFor(pair);
+        const rows = [];
+        // Newest first for readability.
+        const ordered = candles.slice().reverse();
+        for (let i = 0; i < ordered.length; i++) {
+            const c = ordered[i];
+            const prevClose = i < ordered.length - 1 ? ordered[i + 1].close : c.open;
+            const delta = c.close - prevClose;
+            const cls = delta >= 0 ? 'up' : 'down';
+            const sign = delta >= 0 ? '+' : '';
+            rows.push(`<tr>
+                <td>${fmtTimeMsk(c.time)}</td>
+                <td>${fmtNum(c.open, digits)}</td>
+                <td>${fmtNum(c.high, digits)}</td>
+                <td>${fmtNum(c.low, digits)}</td>
+                <td class="${c.close >= c.open ? 'up' : 'down'}">${fmtNum(c.close, digits)}</td>
+                <td class="${cls}">${sign}${delta.toFixed(digits)}</td>
+                <td class="muted">${c.source || '—'}</td>
+            </tr>`);
+        }
+        tbody.innerHTML = rows.join('') || '<tr><td colspan="7" class="muted" style="text-align:center;padding:20px;">Нет данных</td></tr>';
+    }
+
+    function setStatus(pair, tf, count, first, last) {
+        const el = document.getElementById('statusLine');
+        if (!count) { el.style.display = 'none'; return; }
+        el.style.display = 'flex';
+        el.innerHTML = `
+            <span>Пара: <b>${pair}</b></span>
+            <span>ТФ: <b>${tf}</b></span>
+            <span>Свечей: <b>${count}</b></span>
+            <span>Период: <b>${fmtTimeMsk(first)}</b> → <b>${fmtTimeMsk(last)}</b> MSK</span>
+        `;
+    }
+
+    async function loadCandles() {
+        if (!adminSecret()) {
+            showError('Не задан admin secret. Перейди в <a href="settings.html" style="color:#2962ff">настройки</a>, введи его и сохрани.');
+            return;
+        }
+        showError('');
+
+        const pair = document.getElementById('pair').value;
+        const tf   = document.getElementById('tf').value;
+        const viewType = document.getElementById('viewType').value;
+        const limit = parseInt(document.getElementById('limit').value, 10) || 500;
+        const gridOn = document.getElementById('grid').checked;
+
+        if (!pair) { showError('Не выбрана пара'); return; }
+        localStorage.setItem('candlesLastPair', pair);
+        localStorage.setItem('candlesLastTf', tf);
+        localStorage.setItem('candlesLastView', viewType);
+        localStorage.setItem('candlesLastLimit', String(limit));
+        localStorage.setItem('candlesLastGrid', gridOn ? '1' : '0');
+
+        const btn = document.getElementById('reloadBtn');
+        btn.disabled = true; btn.textContent = 'Загрузка…';
+
+        try {
+            const qs = new URLSearchParams({ pair, tf, limit: String(limit) }).toString();
+            const r = await fetch('/api/candles?' + qs, {
+                headers: { 'X-Admin-Secret': adminSecret() },
+            });
+            if (!r.ok) {
+                if (r.status === 401) {
+                    showError('Admin secret неверный. <a href="settings.html" style="color:#2962ff">Поправить</a>.');
+                    return;
+                }
+                throw new Error(`HTTP ${r.status}`);
+            }
+            const data = await r.json();
+            if (!data.success) throw new Error(data.error || 'unknown error');
+
+            const candles = data.candles || [];
+            const tableWrap = document.getElementById('tableWrap');
+            const chartWrap = document.getElementById('chartWrap');
+            const emptyBox  = document.getElementById('errorOrEmpty');
+
+            if (candles.length === 0) {
+                destroyChart();
+                tableWrap.style.display = 'none';
+                chartWrap.style.display = 'none';
+                emptyBox.innerHTML = '<div class="empty">Нет сохранённых свечей для этой пары/ТФ. Подожди ближайший скан-цикл — данные появятся автоматически.</div>';
+                setStatus(pair, tf, 0);
+                return;
+            }
+            emptyBox.innerHTML = '';
+
+            setStatus(pair, tf, candles.length, candles[0].time, candles[candles.length - 1].time);
+
+            if (viewType === 'table') {
+                destroyChart();
+                chartWrap.style.display = 'none';
+                tableWrap.style.display = '';
+                renderTable(candles, pair);
+            } else {
+                tableWrap.style.display = 'none';
+                chartWrap.style.display = '';
+                renderChart(candles, viewType, gridOn, pair);
+            }
+        } catch (err) {
+            showError('Ошибка загрузки: ' + err.message);
+        } finally {
+            btn.disabled = false; btn.textContent = 'Загрузить';
+        }
+    }
+
+    // ─── Init ───
+    (async function init() {
+        // Restore saved selections (where possible).
+        await loadWatchlist();
+        const tf = localStorage.getItem('candlesLastTf');
+        if (tf) document.getElementById('tf').value = tf;
+        const vt = localStorage.getItem('candlesLastView');
+        if (vt) document.getElementById('viewType').value = vt;
+        const lim = localStorage.getItem('candlesLastLimit');
+        if (lim) document.getElementById('limit').value = lim;
+        const gr = localStorage.getItem('candlesLastGrid');
+        if (gr !== null) document.getElementById('grid').checked = gr === '1';
+
+        // Re-render on toggles (grid / view type) without re-fetching when possible.
+        document.getElementById('grid').addEventListener('change', () => {
+            if (document.getElementById('viewType').value !== 'table') loadCandles();
+        });
+        document.getElementById('viewType').addEventListener('change', loadCandles);
+        document.getElementById('pair').addEventListener('change', loadCandles);
+        document.getElementById('tf').addEventListener('change', loadCandles);
+
+        window.addEventListener('resize', () => {
+            if (chart) {
+                const container = document.getElementById('chart');
+                chart.applyOptions({ width: container.clientWidth, height: container.clientHeight || 600 });
+            }
+        });
+
+        loadCandles();
+    })();
+    </script>
+</body>
+</html>
