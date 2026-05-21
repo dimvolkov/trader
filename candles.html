@@ -126,6 +126,54 @@
         .lg-dot.s2 { background: #ff9800; }
         .lg-dot.s3 { background: #00e676; }
 
+        .slom-explain {
+            background: #1e222d;
+            border: 1px solid #2a2e39;
+            border-radius: 6px;
+            padding: 14px 16px;
+            margin-top: 14px;
+            font-size: 13px;
+            line-height: 1.55;
+            color: #d1d4dc;
+        }
+        .slom-explain h3 {
+            font-size: 13px; font-weight: 700; color: #fff;
+            text-transform: uppercase; letter-spacing: 0.5px;
+            margin-bottom: 10px;
+        }
+        .slom-summary { font-size: 12px; color: #787b86; margin-bottom: 12px; }
+        .slom-summary b { color: #d1d4dc; font-weight: 600; }
+        .slom-point {
+            display: grid;
+            grid-template-columns: auto 1fr;
+            gap: 10px 12px;
+            padding: 10px 0;
+            border-top: 1px solid #2a2e39;
+        }
+        .slom-point:first-of-type { border-top: none; padding-top: 4px; }
+        .slom-badge {
+            display: inline-flex; align-items: center; gap: 6px;
+            background: #131722;
+            border: 1px solid #2a2e39;
+            border-radius: 4px;
+            padding: 4px 10px;
+            font-weight: 700;
+            font-size: 12px;
+            font-family: monospace;
+            height: 26px;
+            white-space: nowrap;
+        }
+        .slom-badge.s1 { color: #2962ff; border-color: rgba(41,98,255,0.4); }
+        .slom-badge.s2 { color: #ff9800; border-color: rgba(255,152,0,0.4); }
+        .slom-badge.s3 { color: #00e676; border-color: rgba(0,230,118,0.4); }
+        .slom-badge.skip { color: #787b86; }
+        .slom-meta { font-size: 11px; color: #787b86; margin-top: 4px; }
+        .slom-meta code { background: #131722; padding: 1px 6px; border-radius: 3px; color: #d1d4dc; }
+        .slom-empty {
+            color: #787b86; font-size: 12px;
+            padding: 8px 0; text-align: center;
+        }
+
         .chart-wrap {
             background: #1e222d;
             border: 1px solid #2a2e39;
@@ -274,6 +322,7 @@
 
         <div id="errorOrEmpty"></div>
         <div class="chart-wrap" id="chartWrap"><div id="chart"></div></div>
+        <div class="slom-explain" id="slomExplain" style="display:none;"></div>
         <div class="table-wrap" id="tableWrap" style="display:none;">
             <table class="ohlc" id="ohlcTable">
                 <thead>
@@ -597,6 +646,107 @@
         tbody.innerHTML = rows.join('') || '<tr><td colspan="7" class="muted" style="text-align:center;padding:20px;">Нет данных</td></tr>';
     }
 
+    function renderSlomExplain(analysis, pair, tf) {
+        const box = document.getElementById('slomExplain');
+        const slom = analysis && analysis.slom;
+        if (!slom || tf !== '30min') { box.style.display = 'none'; box.innerHTML = ''; return; }
+
+        const digits = digitsFor(pair);
+        const fp = (v) => (v === null || v === undefined || !isFinite(v)) ? '—'
+                          : (v >= 10 ? v.toFixed(2) : v.toFixed(digits));
+        const dirRu = slom.direction === 'up' ? 'восходящему (LONG)' : 'нисходящему (SHORT)';
+        const opCompare = slom.direction === 'up' ? '>' : '<';
+        const sideName = slom.direction === 'up' ? 'микропик' : 'микродно';
+        const counterName = slom.direction === 'up' ? 'микро-high' : 'микро-low';
+        const tolPct = (slom.tolerance * 100).toFixed(2);
+        const ratioPct = (slom.pullbackRatio * 100).toFixed(0);
+
+        const summary = `
+            <div class="slom-summary">
+                По H1-тренду <b>${slom.h1Trend === 'up' ? '↑ восходящий' : '↓ нисходящий'}</b>
+                ищем вход на M30 по <b>${dirRu}</b> направлению.
+                Параметры: lookback=<b>${slom.lookback}</b>,
+                pullback ratio=<b>${ratioPct}%</b>,
+                tolerance=<b>${tolPct}%</b>,
+                H1 target=<b>${fp(slom.h1Target)}</b>.
+            </div>
+        `;
+
+        const point = (badgeCls, name, sig, body) => {
+            const time = sig ? fmtTimeMsk(sig.time) : '—';
+            const price = sig ? fp(sig.price) : '—';
+            const status = sig
+                ? `<div class="slom-meta"><code>${time}</code> · цена <code>${price}</code></div>`
+                : `<div class="slom-meta">Не сформирован.</div>`;
+            return `
+                <div class="slom-point">
+                    <div><span class="slom-badge ${sig ? badgeCls : 'skip'}">${name}</span></div>
+                    <div>${body}${status}</div>
+                </div>
+            `;
+        };
+
+        const s1body = slom.signal1 ? `
+            <b>Пробой уровня.</b>
+            ${sideName.charAt(0).toUpperCase() + sideName.slice(1)}
+            <code>${fp(slom.breaker.price)}</code> ${opCompare} предыдущего ${counterName}
+            <code>${fp(slom.breakLevel)}</code>, что подтверждает продолжение
+            ${slom.direction === 'up' ? 'восходящей' : 'нисходящей'} структуры на M30 в направлении H1-тренда.
+        ` : `
+            <b>Пробой уровня.</b>
+            Последний ${sideName} <code>${slom.breaker ? fp(slom.breaker.price) : '—'}</code>
+            не пробил предыдущий ${counterName} <code>${fp(slom.breakLevel)}</code> — точка входа не построена.
+        `;
+
+        const s2body = slom.signal2 ? `
+            <b>Откат в зону пробитого уровня.</b>
+            ${slom.direction === 'up'
+                ? `Цена откатилась в зону <code>[${fp(slom.breakLevel)} … ${fp(slom.pullbackZone)}]</code>:
+                   M30-свеча обновила low <code>${fp(slom.signal2.price)}</code>,
+                   попав в этот диапазон и не уходя глубже допустимого толеранса <code>${tolPct}%</code>.
+                   Это подтверждает удержание пробитого уровня как поддержки.`
+                : `Цена откатилась в зону <code>[${fp(slom.pullbackZone)} … ${fp(slom.breakLevel)}]</code>:
+                   M30-свеча обновила high <code>${fp(slom.signal2.price)}</code>,
+                   попав в этот диапазон и не уходя выше допустимого толеранса <code>${tolPct}%</code>.
+                   Это подтверждает удержание пробитого уровня как сопротивления.`}
+        ` : `
+            <b>Откат в зону пробитого уровня.</b>
+            ${slom.signal1
+                ? `После S1 цена ещё не откатывалась в зону
+                   ${slom.direction === 'up'
+                        ? `<code>[${fp(slom.breakLevel)} … ${fp(slom.pullbackZone)}]</code>`
+                        : `<code>[${fp(slom.pullbackZone)} … ${fp(slom.breakLevel)}]</code>`} —
+                   ждём подходящего low/high. Без S2 вход не открывается.`
+                : `S1 не построен — пункт неприменим.`}
+        `;
+
+        const s3body = slom.signal3 ? `
+            <b>Подтверждение продолжения.</b>
+            После отката цена снова ${slom.direction === 'up' ? 'обновила high' : 'обновила low'}
+            <code>${fp(slom.signal3.price)}</code> и
+            ${slom.direction === 'up'
+                ? `прошла выше <code>${fp(slom.breaker.price)}</code> (точка пробоя)`
+                : `ушла ниже <code>${fp(slom.breaker.price)}</code> (точка пробоя)`} —
+            структура «слома» завершена, сетап готов к входу по сторону тренда с целью на
+            H1 target <code>${fp(slom.h1Target)}</code>.
+        ` : `
+            <b>Подтверждение продолжения.</b>
+            ${slom.signal2
+                ? `После S2 цена ещё не ${slom.direction === 'up' ? 'обновила high выше' : 'обновила low ниже'}
+                   <code>${fp(slom.breaker.price)}</code> — подтверждения нет, вход держится в плане pending-ордера на уровне S2.`
+                : `S2 не построен — подтверждение неприменимо.`}
+        `;
+
+        box.innerHTML = `
+            <h3>Обоснование SLOM</h3>
+            ${summary}
+            ${point('s1', 'S1 · пробой',        slom.signal1, s1body)}
+            ${point('s2', 'S2 · откат',          slom.signal2, s2body)}
+            ${point('s3', 'S3 · подтверждение',  slom.signal3, s3body)}
+        `;
+        box.style.display = '';
+    }
+
     function updateLegend(viewType, analysisOn, tf, analysis) {
         const legend = document.getElementById('legend');
         if (viewType === 'table') { legend.style.display = 'none'; return; }
@@ -714,6 +864,7 @@
                 tableWrap.style.display = 'none';
                 chartWrap.style.display = 'none';
                 document.getElementById('legend').style.display = 'none';
+                document.getElementById('slomExplain').style.display = 'none';
                 emptyBox.innerHTML = '<div class="empty">Нет сохранённых свечей для этой пары/ТФ. Подожди ближайший скан-цикл — данные появятся автоматически.</div>';
                 setStatus(pair, tf, 0);
                 return;
@@ -735,6 +886,10 @@
                 renderChart(candles, viewType, gridOn, pair, isPoll);
                 if (analysisOn && analysis) renderAnalysis(analysis, candles, pair);
             }
+
+            // SLOM explanation panel (M30 only, hidden if no slom or not analysing or table view).
+            if (viewType !== 'table' && analysisOn) renderSlomExplain(analysis, pair, tf);
+            else document.getElementById('slomExplain').style.display = 'none';
             lastFetchedAt = Date.now();
             updateRefreshIndicator();
         } catch (err) {

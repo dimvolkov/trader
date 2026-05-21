@@ -474,12 +474,15 @@ function detectSlom(m30Candles, trendDir, h1Levels, pc) {
     const lastMicroLows = microLows.slice(-2);
     let signal1 = null, signal2 = null, signal3 = null;
 
+    let breaker = null, breakLevel = null, pullbackZone = null;
+
     if (trendDir === 'up') {
         const microTop = lastMicroHighs[lastMicroHighs.length - 1];
-        const breakLevel = lastMicroHighs[lastMicroHighs.length - 2].price;
+        breakLevel = lastMicroHighs[lastMicroHighs.length - 2].price;
+        breaker = { price: microTop.price, time: microTop.time };
         if (microTop.price > breakLevel) {
             signal1 = { price: breakLevel, time: microTop.time };
-            const pullbackZone = breakLevel + (microTop.price - breakLevel) * pullbackRatio;
+            pullbackZone = breakLevel + (microTop.price - breakLevel) * pullbackRatio;
             for (let i = microTop.index + 1; i < m30Candles.length; i++) {
                 if (m30Candles[i].low <= pullbackZone && m30Candles[i].low >= breakLevel * (1 - tol)) {
                     signal2 = { price: m30Candles[i].low, time: m30Candles[i].time };
@@ -497,10 +500,11 @@ function detectSlom(m30Candles, trendDir, h1Levels, pc) {
         }
     } else if (trendDir === 'down') {
         const microBottom = lastMicroLows[lastMicroLows.length - 1];
-        const breakLevel = lastMicroLows[lastMicroLows.length - 2].price;
+        breakLevel = lastMicroLows[lastMicroLows.length - 2].price;
+        breaker = { price: microBottom.price, time: microBottom.time };
         if (microBottom.price < breakLevel) {
             signal1 = { price: breakLevel, time: microBottom.time };
-            const pullbackZone = breakLevel - (breakLevel - microBottom.price) * pullbackRatio;
+            pullbackZone = breakLevel - (breakLevel - microBottom.price) * pullbackRatio;
             for (let i = microBottom.index + 1; i < m30Candles.length; i++) {
                 if (m30Candles[i].high >= pullbackZone && m30Candles[i].high <= breakLevel * (1 + tol)) {
                     signal2 = { price: m30Candles[i].high, time: m30Candles[i].time };
@@ -509,7 +513,7 @@ function detectSlom(m30Candles, trendDir, h1Levels, pc) {
             }
             if (signal2) {
                 for (let i = m30Candles.findIndex(c => c.time >= signal2.time) + 1; i < m30Candles.length; i++) {
-                    if (m30Candles[i].low < microBottom.price) {
+                    if (m30Candles[i].low < breaker.price) {
                         signal3 = { price: m30Candles[i].low, time: m30Candles[i].time };
                         break;
                     }
@@ -518,7 +522,17 @@ function detectSlom(m30Candles, trendDir, h1Levels, pc) {
         }
     }
     if (!signal1) return null;
-    return { signal1, signal2: signal2 || null, signal3: signal3 || null, complete: !!(signal1 && signal2 && signal3) };
+    return {
+        signal1,
+        signal2: signal2 || null,
+        signal3: signal3 || null,
+        complete: !!(signal1 && signal2 && signal3),
+        direction: trendDir,
+        breakLevel, breaker, pullbackZone,
+        pullbackRatio, tolerance: tol, lookback,
+        h1ImpulseEnd: h1Levels.impulseEnd,
+        h1Target: h1Levels.target,
+    };
 }
 
 function computeEntry(slom, levels, trend, pc) {
