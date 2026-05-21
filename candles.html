@@ -92,6 +92,40 @@
         }
         .status-line b { color: #d1d4dc; font-weight: 600; }
 
+        .legend {
+            display: flex; flex-wrap: wrap; gap: 6px 22px;
+            background: #1e222d;
+            border: 1px solid #2a2e39;
+            border-radius: 6px;
+            padding: 8px 14px;
+            margin-bottom: 14px;
+            font-size: 12px;
+            color: #d1d4dc;
+            align-items: center;
+        }
+        .legend-section { display: flex; flex-wrap: wrap; gap: 4px 14px; align-items: center; }
+        .legend-title { color: #787b86; font-weight: 600; text-transform: uppercase; font-size: 11px; letter-spacing: 0.5px; margin-right: 4px; }
+        .legend-item  { display: inline-flex; align-items: center; gap: 6px; }
+        .lg-candle    { display: inline-block; width: 8px; height: 14px; border-radius: 1px; }
+        .lg-candle.up   { background: #26a69a; }
+        .lg-candle.down { background: #ef5350; }
+        .lg-arrow {
+            display: inline-block; width: 12px;
+            font-size: 12px; line-height: 1;
+            color: #ffeb3b; text-align: center;
+        }
+        .lg-line { display: inline-block; width: 26px; height: 0; }
+        .lg-line.impulse     { border-top: 3px solid #2962ff; }
+        .lg-line.correction  { border-top: 2px dashed #ff9800; }
+        .lg-line.target      { border-top: 2px dashed #ffeb3b; }
+        .lg-line.imp-end     { border-top: 1px solid #2962ff; }
+        .lg-line.imp-start   { border-top: 1px dotted #787b86; }
+        .lg-line.h1-target   { border-top: 1px dashed rgba(255, 235, 59, 0.5); }
+        .lg-dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; }
+        .lg-dot.s1 { background: #2962ff; }
+        .lg-dot.s2 { background: #ff9800; }
+        .lg-dot.s3 { background: #00e676; }
+
         .chart-wrap {
             background: #1e222d;
             border: 1px solid #2a2e39;
@@ -208,6 +242,35 @@
         </div>
 
         <div class="status-line" id="statusLine" style="display:none;"></div>
+
+        <div class="legend" id="legend" style="display:none;">
+            <div class="legend-section" id="legSeries">
+                <span class="legend-title">Серия</span>
+                <span class="legend-item lg-candleItem"><span class="lg-candle up"></span> рост</span>
+                <span class="legend-item lg-candleItem"><span class="lg-candle down"></span> падение</span>
+                <span class="legend-item lg-lineItem" style="display:none;"><span class="lg-line" style="border-top:2px solid #2962ff;"></span> close</span>
+            </div>
+            <div class="legend-section" id="legAnalysis">
+                <span class="legend-title">Анализ</span>
+                <span class="legend-item"><span class="lg-arrow">▼</span> swing high</span>
+                <span class="legend-item"><span class="lg-arrow">▲</span> swing low</span>
+                <span class="legend-item"><span class="lg-line impulse"></span> импульс</span>
+                <span class="legend-item"><span class="lg-line correction"></span> коррекция</span>
+            </div>
+            <div class="legend-section" id="legLevels">
+                <span class="legend-title">Уровни</span>
+                <span class="legend-item"><span class="lg-line target"></span> target</span>
+                <span class="legend-item"><span class="lg-line imp-end"></span> imp.end</span>
+                <span class="legend-item"><span class="lg-line imp-start"></span> imp.start</span>
+                <span class="legend-item lg-h1" style="display:none;"><span class="lg-line h1-target"></span> H1 target</span>
+            </div>
+            <div class="legend-section" id="legSlom" style="display:none;">
+                <span class="legend-title">SLOM (M30)</span>
+                <span class="legend-item"><span class="lg-dot s1"></span> S1 пробой</span>
+                <span class="legend-item"><span class="lg-dot s2"></span> S2 откат</span>
+                <span class="legend-item"><span class="lg-dot s3"></span> S3 подтв.</span>
+            </div>
+        </div>
 
         <div id="errorOrEmpty"></div>
         <div class="chart-wrap" id="chartWrap"><div id="chart"></div></div>
@@ -534,6 +597,31 @@
         tbody.innerHTML = rows.join('') || '<tr><td colspan="7" class="muted" style="text-align:center;padding:20px;">Нет данных</td></tr>';
     }
 
+    function updateLegend(viewType, analysisOn, tf, analysis) {
+        const legend = document.getElementById('legend');
+        if (viewType === 'table') { legend.style.display = 'none'; return; }
+        legend.style.display = 'flex';
+
+        // Series row: up/down vs single close line — depends on view type.
+        const isLineLike = (viewType === 'line' || viewType === 'area');
+        document.querySelectorAll('.lg-candleItem').forEach(el => el.style.display = isLineLike ? 'none' : 'inline-flex');
+        document.querySelectorAll('.lg-lineItem').forEach(el => el.style.display = isLineLike ? 'inline-flex' : 'none');
+
+        // Analysis section visible only when overlays are actually drawn.
+        const hasAnalysis = !!(analysisOn && analysis && analysis.trend && analysis.trend !== 'range');
+        document.getElementById('legAnalysis').style.display = hasAnalysis ? 'flex' : 'none';
+        document.getElementById('legLevels').style.display = hasAnalysis ? 'flex' : 'none';
+
+        // H1 target chip — only when we actually overlayed H1 levels (M30 view with valid H1).
+        const showH1 = !!(hasAnalysis && tf === '30min' && analysis.h1Levels && Number.isFinite(analysis.h1Levels.target));
+        document.querySelectorAll('.lg-h1').forEach(el => el.style.display = showH1 ? 'inline-flex' : 'none');
+
+        // SLOM section — M30 only and when we have at least one signal.
+        const hasSlom = !!(hasAnalysis && tf === '30min' && analysis.slom
+            && (analysis.slom.signal1 || analysis.slom.signal2 || analysis.slom.signal3));
+        document.getElementById('legSlom').style.display = hasSlom ? 'flex' : 'none';
+    }
+
     function setStatus(pair, tf, count, first, last, analysis) {
         const el = document.getElementById('statusLine');
         if (!count) { el.style.display = 'none'; return; }
@@ -625,6 +713,7 @@
                 destroyChart();
                 tableWrap.style.display = 'none';
                 chartWrap.style.display = 'none';
+                document.getElementById('legend').style.display = 'none';
                 emptyBox.innerHTML = '<div class="empty">Нет сохранённых свечей для этой пары/ТФ. Подожди ближайший скан-цикл — данные появятся автоматически.</div>';
                 setStatus(pair, tf, 0);
                 return;
@@ -632,6 +721,7 @@
             emptyBox.innerHTML = '';
 
             setStatus(pair, tf, candles.length, candles[0].time, candles[candles.length - 1].time, analysis);
+            updateLegend(viewType, analysisOn, tf, analysis);
 
             if (viewType === 'table') {
                 destroyChart();
