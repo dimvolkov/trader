@@ -75,6 +75,11 @@ const DEFAULTS = {
     min_swings_required: 4,
 
     // ─── Per-pair filters ───
+    // Currency pairs to scan (BASE/QUOTE). Seeded from the WATCHLIST env var on
+    // first run; once edited via the settings UI it lives here and overrides the
+    // env on every scan cycle. Empty → scanner falls back to the env list.
+    watchlist: (process.env.WATCHLIST || 'EUR/USD,GBP/USD,USD/JPY,USD/CHF')
+        .split(',').map(s => s.trim()).filter(Boolean),
     // List of pairs to skip entirely (e.g. ["GBP/JPY", "AUD/CAD"]).
     pair_blacklist: [],
     // Per-pair risk override: {"EUR/USD": 0.005} overrides RISK_PCT for that pair.
@@ -182,6 +187,17 @@ function _validate(patch) {
         if (patch[k] !== undefined) _checkNumRange(k, patch[k], errors);
     }
     // Arrays / objects
+    if (patch.watchlist !== undefined) {
+        if (!Array.isArray(patch.watchlist) || patch.watchlist.some(s => typeof s !== 'string')) {
+            errors.push('watchlist must be array of strings');
+        } else if (patch.watchlist.length < 1) {
+            errors.push('watchlist must contain at least one pair');
+        } else if (patch.watchlist.length > 50) {
+            errors.push('watchlist too large (max 50)');
+        } else if (patch.watchlist.some(s => !/^[A-Z0-9]{2,6}\/[A-Z0-9]{2,6}$/.test(s))) {
+            errors.push('watchlist pairs must look like BASE/QUOTE (e.g. EUR/USD)');
+        }
+    }
     if (patch.pair_blacklist !== undefined) {
         if (!Array.isArray(patch.pair_blacklist)
             || patch.pair_blacklist.some(s => typeof s !== 'string')) {

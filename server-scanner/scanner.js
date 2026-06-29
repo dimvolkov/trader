@@ -62,6 +62,12 @@ const CONFIG = {
 
 const MAX_RISK = CONFIG.deposit * CONFIG.riskPct;
 
+// Live watchlist: editable via the settings UI (pending_config), seeded from the
+// WATCHLIST env var. Falls back to the env list when the config list is empty.
+function resolveWatchlist(pc) {
+    return (pc && Array.isArray(pc.watchlist) && pc.watchlist.length) ? pc.watchlist : CONFIG.watchlist;
+}
+
 const RATE_DELAYS = {
     twelvedata: 12000, tradermade: 3000, polygon: 12000,
     finnhub: 1500, fcsapi: 21000, alphavantage: 15000, oanda: 500,
@@ -992,9 +998,10 @@ async function runScanCycle() {
     const rateDelay = RATE_DELAYS[CONFIG.dataSource] || 12000;
 
     // Apply per-pair filter (blacklist) and time-window filter from live config.
+    const watchlist = resolveWatchlist(pcInitial);
     const blacklist = new Set(pcInitial.pair_blacklist || []);
-    const pairs = CONFIG.watchlist.filter(p => !blacklist.has(p));
-    const skipped = CONFIG.watchlist.filter(p => blacklist.has(p));
+    const pairs = watchlist.filter(p => !blacklist.has(p));
+    const skipped = watchlist.filter(p => blacklist.has(p));
 
     // Day-of-week filter (MSK).
     if (Array.isArray(pcInitial.allowed_weekdays) && pcInitial.allowed_weekdays.length > 0) {
@@ -1170,7 +1177,7 @@ function formatMs(ms) {
 async function schedulerLoop() {
     log('Scanner started');
     log(`  Data source: ${CONFIG.dataSource}`);
-    log(`  Watchlist: ${CONFIG.watchlist.join(', ')}`);
+    log(`  Watchlist: ${resolveWatchlist(pendingConfig.get()).join(', ')}`);
     log(`  Schedule: ${CONFIG.scheduleFrom}:00 - ${CONFIG.scheduleTo}:00 MSK, every ${CONFIG.intervalHours}h`);
     log(`  Telegram: ${CONFIG.telegramBotToken ? 'configured' : 'NOT configured'}`);
     log(`  Auto-trade: ${CONFIG.autoTrade ? `ON → ${CONFIG.executorUrl}` : 'OFF'}`);
@@ -1848,17 +1855,18 @@ const apiServer = http.createServer(async (req, res) => {
         if (p === '/api/scan-state' && req.method === 'GET') {
             if (!requireAdmin(req)) return reply(res, 401, { success: false, error: 'admin secret required' });
             const pc = pendingConfig.get();
+            const watchlist = resolveWatchlist(pc);
             const blacklist = new Set(pc.pair_blacklist || []);
             const results = {};
             const history = {};
-            for (const pair of CONFIG.watchlist) {
+            for (const pair of watchlist) {
                 if (lastResults[pair]) results[pair] = lastResults[pair];
                 if (scanHistoryByPair[pair]) history[pair] = scanHistoryByPair[pair];
             }
             return reply(res, 200, {
                 success: true,
                 scanState,
-                watchlist: CONFIG.watchlist,
+                watchlist,
                 blacklist: Array.from(blacklist),
                 dataSource: CONFIG.dataSource,
                 intervalHours: CONFIG.intervalHours,

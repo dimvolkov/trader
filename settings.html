@@ -348,6 +348,22 @@
 
             <div class="source-card">
                 <div class="source-header">
+                    <span class="source-name">Валютные пары (watchlist)</span>
+                    <span id="pcWatchlistBadge"><span class="source-badge badge-empty">Не загружено</span></span>
+                </div>
+                <div class="field-row">
+                    <div>
+                        <div class="field-label">Список пар для сканирования</div>
+                        <div class="field-help">Формат БАЗА/КОТИРОВКА, по одной на строку или через запятую (напр. EUR/USD, XAU/USD). Применяется со следующего скана. Пустой список → берётся WATCHLIST из env.</div>
+                    </div>
+                </div>
+                <textarea id="pc_watchlist" class="field-input" rows="6"
+                    style="width:100%;font-family:monospace;resize:vertical;"
+                    placeholder="EUR/USD&#10;GBP/USD&#10;USD/JPY&#10;USD/CHF"></textarea>
+            </div>
+
+            <div class="source-card">
+                <div class="source-header">
                     <span class="source-name">Поведение pending</span>
                     <span id="pcStateBadge"><span class="source-badge badge-empty">Не загружено</span></span>
                 </div>
@@ -935,6 +951,13 @@
                 if (PC_BOOL.has(f)) el.checked = !!cfg[f];
                 else el.value = cfg[f] ?? '';
             }
+            const wl = document.getElementById('pc_watchlist');
+            if (wl) wl.value = Array.isArray(cfg.watchlist) ? cfg.watchlist.join('\n') : '';
+            const wlBadge = document.getElementById('pcWatchlistBadge');
+            if (wlBadge) {
+                const n = Array.isArray(cfg.watchlist) ? cfg.watchlist.length : 0;
+                wlBadge.innerHTML = `<span class="source-badge badge-active">${n} пар</span>`;
+            }
             document.getElementById('pcStateBadge').innerHTML = cfg.use_pending
                 ? '<span class="source-badge badge-active">PENDING ON</span>'
                 : '<span class="source-badge badge-configured">MARKET (OFF)</span>';
@@ -952,6 +975,10 @@
                 } else {
                     patch[f] = el.value;
                 }
+            }
+            const wl = document.getElementById('pc_watchlist');
+            if (wl) {
+                patch.watchlist = wl.value.split(/[\s,]+/).map(s => s.trim().toUpperCase()).filter(Boolean);
             }
             return patch;
         }
