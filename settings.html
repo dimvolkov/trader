@@ -406,6 +406,14 @@
 
                 <div class="field-row">
                     <div>
+                        <div class="field-label">Максимальный R:R</div>
+                        <div class="field-help">Отсев вырожденных сигналов: стоп почти совпал со входом → R:R и размер позиции взлетают. Всё выше порога отбрасывается</div>
+                    </div>
+                    <input type="number" class="field-input" id="pc_max_rr" min="2" step="0.5">
+                </div>
+
+                <div class="field-row">
+                    <div>
                         <div class="field-label">Макс. одновременно активных pending</div>
                         <div class="field-help">Защита от перегруза счёта</div>
                     </div>
@@ -886,13 +894,13 @@
         const PC_FIELDS = [
             'use_pending', 'pending_type', 'ttl_hours', 'replace_existing_pending',
             'max_distance_pct_from_entry', 'cancel_on_stop_breach', 'watcher_max_age_hours',
-            'watcher_interval_minutes', 'min_rr', 'min_winrate_threshold',
+            'watcher_interval_minutes', 'min_rr', 'max_rr', 'min_winrate_threshold',
             'min_samples_for_winrate', 'winrate_lookback_days', 'max_pending_total',
         ];
         const PC_BOOL = new Set(['use_pending', 'replace_existing_pending', 'cancel_on_stop_breach']);
         const PC_NUM = new Set([
             'ttl_hours', 'max_distance_pct_from_entry', 'watcher_max_age_hours',
-            'watcher_interval_minutes', 'min_rr', 'min_winrate_threshold',
+            'watcher_interval_minutes', 'min_rr', 'max_rr', 'min_winrate_threshold',
             'min_samples_for_winrate', 'winrate_lookback_days', 'max_pending_total',
         ]);
 
