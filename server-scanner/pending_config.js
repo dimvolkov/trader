@@ -39,6 +39,13 @@ const DEFAULTS = {
     // Minimum R:R to send an order at all (overrides scanner's default of 3.0).
     min_rr: 3.0,
 
+    // Sanity cap on R:R. A near-zero stop distance (e.g. Signal 1 ≈ Signal 2)
+    // makes R:R explode (1:68 etc.) and position size blow up — that's a
+    // degenerate signal, not a great one. Reject anything above this so it
+    // never reaches the UI / Telegram / executor. The broker also rejects such
+    // tight stops downstream (stops_level), so this just fails fast & visibly.
+    max_rr: 15.0,
+
     // Adaptive filter: skip placement if retrospective winrate on this pair
     // (over `winrate_lookback_days`) is below this threshold AND we have at
     // least `min_samples_for_winrate` historical trades. 0 = disabled.
@@ -113,6 +120,7 @@ const RANGES = {
     watcher_max_age_hours:       { min: 0,      max: 720 },
     watcher_interval_minutes:    { min: 1,      max: 1440 },
     min_rr:                      { min: 0.5,    max: 10 },
+    max_rr:                      { min: 2,      max: 1000 },
     min_winrate_threshold:       { min: 0,      max: 1 },
     min_samples_for_winrate:     { min: 1,      max: 10000 },
     winrate_lookback_days:       { min: 1,      max: 365 },
@@ -163,7 +171,7 @@ function _validate(patch) {
     // Numeric ranges
     const numeric = [
         'ttl_hours', 'max_distance_pct_from_entry', 'watcher_max_age_hours',
-        'watcher_interval_minutes', 'min_rr', 'min_winrate_threshold',
+        'watcher_interval_minutes', 'min_rr', 'max_rr', 'min_winrate_threshold',
         'min_samples_for_winrate', 'winrate_lookback_days', 'max_pending_total',
         'h1_swing_lookback', 'm30_swing_lookback', 'pullback_zone_ratio',
         'breakout_tolerance_pct', 'stop_buffer_ratio', 'min_h1_candles',

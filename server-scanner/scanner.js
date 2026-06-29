@@ -551,12 +551,27 @@ function computeEntry(slom, levels, trend, pc) {
     }
     const riskPerUnit = Math.abs(entry - stop);
     const profitPerUnit = Math.abs(take - entry);
+
+    // Degenerate signal guard: when Signal 1 ≈ Signal 2 the buffer (and thus
+    // the stop distance) collapses to ~0, making R:R and position size blow up
+    // (e.g. R:R 1:68, size 121065). Reject such signals instead of surfacing a
+    // fake "great" entry that the broker rejects anyway (stops too tight).
+    const maxRr = typeof pc.max_rr === 'number' ? pc.max_rr : 15;
+    if (!(riskPerUnit > 0)) {
+        return {
+            entry, stop, take, rr: Infinity, direction: trend,
+            positionSize: 0, potentialProfit: 0, potentialLoss: MAX_RISK,
+            valid: false, reason: 'Стоп совпал со входом (вырожденный сигнал)',
+        };
+    }
+
     const rr = profitPerUnit / riskPerUnit;
     const positionSize = MAX_RISK / riskPerUnit;
     const potentialProfit = positionSize * profitPerUnit;
     const potentialLoss = MAX_RISK;
 
     const base = { entry, stop, take, rr, direction: trend, positionSize, potentialProfit, potentialLoss };
+    if (rr > maxRr) return { ...base, valid: false, reason: `R:R ${rr.toFixed(1)} > max ${maxRr} — стоп слишком узкий` };
     if (rr < minRr) return { ...base, valid: false, reason: `R:R ${rr.toFixed(2)} < ${minRr.toFixed(2)}` };
     return { ...base, valid: true, reason: `R:R = ${rr.toFixed(2)}` };
 }
@@ -636,6 +651,48 @@ function analyzePair(h1Candles, m30Candles, pc) {
 }
 
 // ─── Telegram ───
+// Low-level Telegram sender, shared by all notifications.
+// - Retries on transient network failure ("fetch failed") and 429/5xx, since
+//   connectivity from the scanner host to api.telegram.org is intermittent.
+// - Falls back to plain text (no parse_mode) when Telegram rejects the
+//   Markdown with 400, so a card is never silently lost to a formatting slip.
+// Returns { ok, skipped?, downgraded?, error? }.
+async function postTelegram(text, { retries = 3 } = {}) {
+    if (!CONFIG.telegramBotToken || !CONFIG.telegramChatId) return { ok: false, skipped: true };
+    const url = `https://api.telegram.org/bot${CONFIG.telegramBotToken}/sendMessage`;
+    const send = (useMarkdown) => fetchWithTimeout(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+            chat_id: CONFIG.telegramChatId,
+            text,
+            ...(useMarkdown ? { parse_mode: 'Markdown' } : {}),
+        }),
+    });
+
+    let lastErr = null;
+    for (let attempt = 1; attempt <= retries; attempt++) {
+        try {
+            const res = await send(true);
+            if (res.ok) return { ok: true };
+            const data = await res.json().catch(() => ({}));
+            // Markdown parse error → retry once as plain text.
+            if (res.status === 400) {
+                const plain = await send(false);
+                if (plain.ok) return { ok: true, downgraded: true };
+                const pdata = await plain.json().catch(() => ({}));
+                lastErr = `HTTP ${plain.status}: ${pdata.description || data.description || 'Bad Request'}`;
+            } else {
+                lastErr = `HTTP ${res.status}: ${data.description || 'Unknown'}`;
+            }
+        } catch (err) {
+            lastErr = err.message;   // network "fetch failed" → retry
+        }
+        if (attempt < retries) await delay(1500 * attempt);
+    }
+    return { ok: false, error: lastErr };
+}
+
 async function sendTelegramNotification(pair, result) {
     if (!CONFIG.telegramBotToken || !CONFIG.telegramChatId) {
         log(`  ${pair}: Telegram not configured — skipping`);
@@ -663,47 +720,18 @@ async function sendTelegramNotification(pair, result) {
         `[📈 Открыть график](${chartUrl})`,
     ].join('\n');
 
-    try {
-        const res = await fetchWithTimeout(`https://api.telegram.org/bot${CONFIG.telegramBotToken}/sendMessage`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                chat_id: CONFIG.telegramChatId,
-                text,
-                parse_mode: 'Markdown',
-            }),
-        });
-        if (res.ok) {
-            log(`  ${pair}: Telegram sent (${dir})`);
-        } else {
-            const data = await res.json().catch(() => ({}));
-            log(`  ${pair}: Telegram error ${res.status}: ${data.description || 'Unknown'}`);
-        }
-    } catch (err) {
-        log(`  ${pair}: Telegram network error: ${err.message}`);
+    const r = await postTelegram(text);
+    if (r.ok) {
+        log(`  ${pair}: Telegram sent (${dir})${r.downgraded ? ' [plain]' : ''}`);
+    } else if (!r.skipped) {
+        log(`  ${pair}: Telegram FAILED after retries — ${r.error}`);
     }
 }
 
 // ─── Telegram (generic) ───
 async function sendTelegram(text) {
-    if (!CONFIG.telegramBotToken || !CONFIG.telegramChatId) return;
-    try {
-        const res = await fetchWithTimeout(`https://api.telegram.org/bot${CONFIG.telegramBotToken}/sendMessage`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                chat_id: CONFIG.telegramChatId,
-                text,
-                parse_mode: 'Markdown',
-            }),
-        });
-        if (!res.ok) {
-            const data = await res.json().catch(() => ({}));
-            log(`  Telegram error ${res.status}: ${data.description || 'Unknown'}`);
-        }
-    } catch (err) {
-        log(`  Telegram network error: ${err.message}`);
-    }
+    const r = await postTelegram(text);
+    if (!r.ok && !r.skipped) log(`  Telegram FAILED after retries — ${r.error}`);
 }
 
 // ─── Account Balance ───
@@ -1014,6 +1042,9 @@ async function runScanCycle() {
         return;
     }
 
+    // Per-cycle tally for the final Telegram summary.
+    const cycleSummary = [];
+
     for (let i = 0; i < pairs.length; i++) {
         const pair = pairs[i];
         scanState.currentPair = pair;
@@ -1076,6 +1107,12 @@ async function runScanCycle() {
             scanHistoryByPair[pair] = scanHistoryByPair[pair].slice(-SCAN_HISTORY_MAX);
         }
 
+        cycleSummary.push({
+            pair, valid, verdict, error: !!errMsg,
+            direction: result && result.entry ? result.entry.direction : null,
+            rr: result && result.entry && isFinite(result.entry.rr) ? result.entry.rr : null,
+        });
+
         if (i < pairs.length - 1) await delay(rateDelay);
     }
 
@@ -1084,6 +1121,26 @@ async function runScanCycle() {
     scanState.finishedAt = new Date().toISOString();
 
     log(`=== Scan complete ===`);
+
+    // Final summary to Telegram so it's clear the cycle finished (and what it
+    // found) — previously the bot went silent after the per-signal cards.
+    const signals = cycleSummary.filter(s => s.valid);
+    const errors = cycleSummary.filter(s => s.error);
+    const summaryLines = [
+        `✅ *Скан завершён*`,
+        ``,
+        `Пар: ${cycleSummary.length} · Сигналов: ${signals.length}${errors.length ? ` · Ошибок: ${errors.length}` : ''}`,
+    ];
+    if (signals.length) {
+        summaryLines.push(``);
+        for (const s of signals) {
+            const dir = s.direction === 'up' ? 'LONG ↑' : 'SHORT ↓';
+            summaryLines.push(`• ${s.pair} — ${dir}${s.rr != null ? ` (R:R 1:${s.rr.toFixed(1)})` : ''}`);
+        }
+    } else {
+        summaryLines.push(`Входов по стратегии нет.`);
+    }
+    await sendTelegram(summaryLines.join('\n'));
 }
 
 // ─── Scheduler ───
@@ -1280,6 +1337,7 @@ function buildStrategySystemPrompt() {
         '',
         '=== Текущие настраиваемые параметры (pending_config) ===',
         `- Минимальный R:R для сигнала: ${pc.min_rr}`,
+        `- Максимальный R:R (отсев вырожденных сигналов): ${pc.max_rr}`,
         `- Lookback свингов на H1: ${pc.h1_swing_lookback} свечей`,
         `- Lookback свингов на M30: ${pc.m30_swing_lookback} свечей`,
         `- Pullback ratio (зона Сигнала 2): ${pc.pullback_zone_ratio}`,
