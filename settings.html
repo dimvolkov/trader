@@ -360,6 +360,11 @@
                 <textarea id="pc_watchlist" class="field-input" rows="6"
                     style="width:100%;font-family:monospace;resize:vertical;"
                     placeholder="EUR/USD&#10;GBP/USD&#10;USD/JPY&#10;USD/CHF"></textarea>
+                <div class="btn-row">
+                    <button class="btn btn-test" onclick="pcLoadAll()">Загрузить с сервера</button>
+                    <button class="btn btn-primary" onclick="pcSaveWatchlist()">Сохранить пары</button>
+                </div>
+                <div class="test-result" id="pcWatchlistResult"></div>
             </div>
 
             <div class="source-card">
@@ -995,6 +1000,27 @@
             pcShow(document.getElementById('pcAdminResult'), 'Конфиг загружен', 'ok');
             pcLoadStats();
             pcLoadActivePending();
+        };
+
+        window.pcSaveWatchlist = async function () {
+            const wl = document.getElementById('pc_watchlist');
+            const pairs = wl.value.split(/[\s,]+/).map(s => s.trim().toUpperCase()).filter(Boolean);
+            const out = document.getElementById('pcWatchlistResult');
+            if (!pairs.length) { pcShow(out, 'Список пуст — добавьте хотя бы одну пару', 'fail'); return; }
+            pcShow(out, 'Сохранение...', 'loading');
+            // Send only the watchlist so other pending settings stay untouched
+            // even if the full form wasn't loaded first.
+            const r = await pcFetch('/api/pending-config', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ watchlist: pairs }),
+            });
+            if (!r.success) {
+                pcShow(out, 'Ошибка: ' + (r.error || r.errors?.join('; ') || 'fail'), 'fail');
+                return;
+            }
+            pcFillForm(r.config);
+            pcShow(out, `Сохранено: ${pairs.length} пар. Применится со следующего скана.`, 'ok');
         };
 
         window.pcSaveConfig = async function () {
