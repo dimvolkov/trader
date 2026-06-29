@@ -464,6 +464,11 @@ function detectSlom(m30Candles, trendDir, h1Levels, pc) {
     const lookback = pc.m30_swing_lookback;
     const pullbackRatio = pc.pullback_zone_ratio;
     const tol = pc.breakout_tolerance_pct;
+    // Minimum pullback depth (fraction of the impulse) required for Signal 2 to
+    // count as a real pullback. Guards against degenerate signals where the
+    // pullback sits on the break level (Signal 2 ≈ Signal 1): then |S2-S1| → 0,
+    // the stop buffer collapses, and R:R + position size blow up.
+    const minPullbackRatio = typeof pc.min_pullback_ratio === 'number' ? pc.min_pullback_ratio : 0.15;
     const m30Swings = findSwingPoints(m30Candles, lookback);
     if (m30Swings.length < 4) return null;
     const recentSwings = m30Swings.slice(-10);
@@ -482,9 +487,14 @@ function detectSlom(m30Candles, trendDir, h1Levels, pc) {
         breaker = { price: microTop.price, time: microTop.time };
         if (microTop.price > breakLevel) {
             signal1 = { price: breakLevel, time: microTop.time };
-            pullbackZone = breakLevel + (microTop.price - breakLevel) * pullbackRatio;
+            const impulse = microTop.price - breakLevel;
+            pullbackZone = breakLevel + impulse * pullbackRatio;
+            // Reject degenerate pullbacks: Signal 2 must stay at least
+            // minPullbackRatio×impulse above the break level, so |S2-S1| (and the
+            // resulting stop distance) can never collapse to ~0.
+            const minPullbackLevel = breakLevel + impulse * minPullbackRatio;
             for (let i = microTop.index + 1; i < m30Candles.length; i++) {
-                if (m30Candles[i].low <= pullbackZone && m30Candles[i].low >= breakLevel * (1 - tol)) {
+                if (m30Candles[i].low <= pullbackZone && m30Candles[i].low >= minPullbackLevel) {
                     signal2 = { price: m30Candles[i].low, time: m30Candles[i].time };
                     break;
                 }
@@ -504,9 +514,13 @@ function detectSlom(m30Candles, trendDir, h1Levels, pc) {
         breaker = { price: microBottom.price, time: microBottom.time };
         if (microBottom.price < breakLevel) {
             signal1 = { price: breakLevel, time: microBottom.time };
-            pullbackZone = breakLevel - (breakLevel - microBottom.price) * pullbackRatio;
+            const impulse = breakLevel - microBottom.price;
+            pullbackZone = breakLevel - impulse * pullbackRatio;
+            // Mirror of the up-trend guard: Signal 2 must stay at least
+            // minPullbackRatio×impulse below the break level.
+            const minPullbackLevel = breakLevel - impulse * minPullbackRatio;
             for (let i = microBottom.index + 1; i < m30Candles.length; i++) {
-                if (m30Candles[i].high >= pullbackZone && m30Candles[i].high <= breakLevel * (1 + tol)) {
+                if (m30Candles[i].high >= pullbackZone && m30Candles[i].high <= minPullbackLevel) {
                     signal2 = { price: m30Candles[i].high, time: m30Candles[i].time };
                     break;
                 }
@@ -552,11 +566,10 @@ function computeEntry(slom, levels, trend, pc) {
     const riskPerUnit = Math.abs(entry - stop);
     const profitPerUnit = Math.abs(take - entry);
 
-    // Degenerate signal guard: when Signal 1 ≈ Signal 2 the buffer (and thus
-    // the stop distance) collapses to ~0, making R:R and position size blow up
-    // (e.g. R:R 1:68, size 121065). Reject such signals instead of surfacing a
-    // fake "great" entry that the broker rejects anyway (stops too tight).
-    const maxRr = typeof pc.max_rr === 'number' ? pc.max_rr : 15;
+    // Final safety net. The degenerate case (Signal 1 ≈ Signal 2 → stop ≈ entry)
+    // is now prevented upstream in detectSlom via min_pullback_ratio, so this
+    // should never trigger — but keep it so a zero-distance stop can never reach
+    // the UI / Telegram / executor with an Infinity R:R or blown-up size.
     if (!(riskPerUnit > 0)) {
         return {
             entry, stop, take, rr: Infinity, direction: trend,
@@ -571,7 +584,6 @@ function computeEntry(slom, levels, trend, pc) {
     const potentialLoss = MAX_RISK;
 
     const base = { entry, stop, take, rr, direction: trend, positionSize, potentialProfit, potentialLoss };
-    if (rr > maxRr) return { ...base, valid: false, reason: `R:R ${rr.toFixed(1)} > max ${maxRr} — стоп слишком узкий` };
     if (rr < minRr) return { ...base, valid: false, reason: `R:R ${rr.toFixed(2)} < ${minRr.toFixed(2)}` };
     return { ...base, valid: true, reason: `R:R = ${rr.toFixed(2)}` };
 }
@@ -1337,10 +1349,10 @@ function buildStrategySystemPrompt() {
         '',
         '=== Текущие настраиваемые параметры (pending_config) ===',
         `- Минимальный R:R для сигнала: ${pc.min_rr}`,
-        `- Максимальный R:R (отсев вырожденных сигналов): ${pc.max_rr}`,
         `- Lookback свингов на H1: ${pc.h1_swing_lookback} свечей`,
         `- Lookback свингов на M30: ${pc.m30_swing_lookback} свечей`,
         `- Pullback ratio (зона Сигнала 2): ${pc.pullback_zone_ratio}`,
+        `- Мин. глубина отката Сигнала 2 (отсев вырожденных сигналов): ${pc.min_pullback_ratio} × импульс`,
         `- Допуск к breakLevel: ±${(pc.breakout_tolerance_pct * 100).toFixed(2)}%`,
         `- Буфер стоп-лосса: ${pc.stop_buffer_ratio} × |S2-S1|`,
         `- Минимум свечей H1 для анализа: ${pc.min_h1_candles}`,

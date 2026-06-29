@@ -37,14 +37,10 @@ const DEFAULTS = {
     watcher_interval_minutes: 15,
 
     // Minimum R:R to send an order at all (overrides scanner's default of 3.0).
+    // There is intentionally no upper R:R cap — a high R:R is desirable. The
+    // degenerate "R:R 1:68" case (Signal 1 ≈ Signal 2 → stop ≈ entry) is
+    // prevented structurally via min_pullback_ratio below, not by capping R:R.
     min_rr: 3.0,
-
-    // Sanity cap on R:R. A near-zero stop distance (e.g. Signal 1 ≈ Signal 2)
-    // makes R:R explode (1:68 etc.) and position size blow up — that's a
-    // degenerate signal, not a great one. Reject anything above this so it
-    // never reaches the UI / Telegram / executor. The broker also rejects such
-    // tight stops downstream (stops_level), so this just fails fast & visibly.
-    max_rr: 15.0,
 
     // Adaptive filter: skip placement if retrospective winrate on this pair
     // (over `winrate_lookback_days`) is below this threshold AND we have at
@@ -64,6 +60,11 @@ const DEFAULTS = {
     m30_swing_lookback: 4,
     // Pullback ratio for Signal 2 detection (entry zone = breakLevel + ratio*(impulse)).
     pullback_zone_ratio: 0.5,
+    // Minimum pullback depth as a fraction of the impulse. Signal 2 must sit at
+    // least this far from the break level (Signal 1), so |S2-S1| — and thus the
+    // stop distance — can never collapse to ~0. Rejects degenerate signals
+    // (R:R/position-size blow-ups) at the source instead of capping R:R.
+    min_pullback_ratio: 0.15,
     // Tolerance around breakLevel — Signal 2 may touch level within this fraction.
     breakout_tolerance_pct: 0.001,
     // Stop-loss buffer as fraction of |signal2 - signal1| distance.
@@ -120,7 +121,6 @@ const RANGES = {
     watcher_max_age_hours:       { min: 0,      max: 720 },
     watcher_interval_minutes:    { min: 1,      max: 1440 },
     min_rr:                      { min: 0.5,    max: 10 },
-    max_rr:                      { min: 2,      max: 1000 },
     min_winrate_threshold:       { min: 0,      max: 1 },
     min_samples_for_winrate:     { min: 1,      max: 10000 },
     winrate_lookback_days:       { min: 1,      max: 365 },
@@ -128,6 +128,7 @@ const RANGES = {
     h1_swing_lookback:           { min: 2,      max: 10,   integer: true },
     m30_swing_lookback:          { min: 2,      max: 10,   integer: true },
     pullback_zone_ratio:         { min: 0.2,    max: 0.8 },
+    min_pullback_ratio:          { min: 0.05,   max: 0.5 },
     breakout_tolerance_pct:      { min: 0.0001, max: 0.005 },
     stop_buffer_ratio:           { min: 0.1,    max: 1.5 },
     min_h1_candles:              { min: 10,     max: 50,   integer: true },
@@ -171,10 +172,10 @@ function _validate(patch) {
     // Numeric ranges
     const numeric = [
         'ttl_hours', 'max_distance_pct_from_entry', 'watcher_max_age_hours',
-        'watcher_interval_minutes', 'min_rr', 'max_rr', 'min_winrate_threshold',
+        'watcher_interval_minutes', 'min_rr', 'min_winrate_threshold',
         'min_samples_for_winrate', 'winrate_lookback_days', 'max_pending_total',
         'h1_swing_lookback', 'm30_swing_lookback', 'pullback_zone_ratio',
-        'breakout_tolerance_pct', 'stop_buffer_ratio', 'min_h1_candles',
+        'min_pullback_ratio', 'breakout_tolerance_pct', 'stop_buffer_ratio', 'min_h1_candles',
         'min_swings_required',
     ];
     for (const k of numeric) {
