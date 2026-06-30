@@ -172,6 +172,21 @@ class PendingRequest(BaseModel):
     config_snapshot: Optional[Dict[str, Any]] = Field(default_factory=dict)
 
 
+class SkipNote(BaseModel):
+    """A placement attempt the scanner rejected pre-flight (never sent to MT5).
+    Recorded in the journal so the reason stays visible next to real orders
+    instead of the setup vanishing without a trace."""
+    pair: str
+    direction: str
+    entry: float
+    stop: float
+    take: float
+    rr: float = 0
+    volume: float = 0
+    reason: str
+    signal_context: Optional[Dict[str, Any]] = Field(default_factory=dict)
+
+
 def _normalize_direction(direction: str) -> str:
     d = direction.lower()
     if d in ("up", "buy", "long"):
@@ -465,6 +480,28 @@ async def cancel_by_pair(pair: str, reason: Optional[str] = "replace", x_api_sec
     return result
 
 
+@app.post("/journal/skip")
+async def journal_skip(note: SkipNote, x_api_secret: str = Header(None)):
+    """Record a scanner-side pre-flight skip (e.g. entry too close to market) in
+    the journal, so a setup dropped before it ever reaches MT5 still leaves a
+    trace with its reason instead of silently disappearing."""
+    require_auth(x_api_secret)
+    log_trade({
+        "action": "pending_skipped",
+        "pair": note.pair,
+        "direction": _normalize_direction(note.direction),
+        "entry": note.entry,
+        "stop": note.stop,
+        "take": note.take,
+        "rr": note.rr,
+        "volume": note.volume,
+        "reason": note.reason,
+        "signal_context": note.signal_context,
+    })
+    logger.info(f"Pending skipped (scanner): {note.pair} — {note.reason}")
+    return {"success": True}
+
+
 # ─── Endpoints: retrospective analysis ───
 
 ORDER_STATE_NAMES = {
@@ -587,10 +624,11 @@ async def journal(
     # Walk local attempts (pending and market)
     for r in log_recs:
         action = r.get("action")
-        if action not in ("pending_placed", "market_open", "pending_failed", "pending_rejected"):
+        if action not in ("pending_placed", "market_open", "pending_failed",
+                          "pending_rejected", "pending_skipped"):
             continue
         ticket = r.get("ticket") or (r.get("result") or {}).get("order_id")
-        if action == "pending_failed" or action == "pending_rejected" or not ticket:
+        if action in ("pending_failed", "pending_rejected", "pending_skipped") or not ticket:
             rows.append({
                 "timestamp": r.get("timestamp"),
                 "pair": r.get("pair"),
@@ -602,7 +640,8 @@ async def journal(
                 "rr": r.get("rr"),
                 "volume": r.get("volume"),
                 "ticket": ticket,
-                "status": "failed" if action != "pending_rejected" else "rejected",
+                "status": {"pending_rejected": "rejected",
+                           "pending_skipped": "skipped"}.get(action, "failed"),
                 "reason": r.get("reason") or (r.get("result") or {}).get("error"),
                 "profit": None,
                 "close_price": None,

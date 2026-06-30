@@ -914,6 +914,25 @@ function pendingMatchesSignal(order, e, tolPrice) {
         && close(order.tp, e.take);
 }
 
+// Record a pre-flight skip in the executor's journal so a setup dropped before
+// it ever reaches MT5 still leaves a trace (with reason) instead of vanishing.
+// Best-effort: a logging failure must never block the scan cycle.
+async function recordSkip(pair, e, reason) {
+    try {
+        await execFetch('POST', '/journal/skip', {
+            pair,
+            direction: e.direction,
+            entry: e.entry,
+            stop: e.stop,
+            take: e.take,
+            rr: e.rr,
+            reason,
+        });
+    } catch (err) {
+        log(`  ${pair}: WARN could not record skip in journal — ${err.message}`);
+    }
+}
+
 async function placePendingOrder(pair, result, pc) {
     const e = result.entry;
 
@@ -943,6 +962,26 @@ async function placePendingOrder(pair, result, pc) {
         if (slDist < minDist || tpDist < minDist) {
             const d = market.digits || 5;
             log(`  ${pair}: SKIPPED pending — stops too tight (SL ${slDist.toFixed(d)}, TP ${tpDist.toFixed(d)} < broker min ${minDist.toFixed(d)} = ${market.stops_level} pts)`);
+            return;
+        }
+    }
+
+    // Too-close-to-market filter: MT5 rejects any pending whose entry sits within
+    // `stops_level * point` of the current price (10015 Invalid price / "too close
+    // to market"). The breakout entries this strategy emits can land within a pip
+    // of market; reject pre-flight so the doomed request never reaches MT5, and
+    // record the reason in the journal. Mirrors place_pending_order's own check
+    // (ask for buy, bid for sell) so the scanner and executor agree on the gate.
+    if (market && market.stops_level > 0 && market.point > 0) {
+        const refPrice = e.direction === 'up' ? market.ask : market.bid;
+        const minDist = market.stops_level * market.point;
+        const entryDist = Math.abs(e.entry - refPrice);
+        if (entryDist < minDist) {
+            const d = market.digits || 5;
+            const reason = `Entry ${e.entry.toFixed(d)} too close to market ${refPrice.toFixed(d)} `
+                + `(min ${minDist.toFixed(d)} = ${market.stops_level} pts)`;
+            log(`  ${pair}: SKIPPED pending — ${reason}`);
+            await recordSkip(pair, e, reason);
             return;
         }
     }

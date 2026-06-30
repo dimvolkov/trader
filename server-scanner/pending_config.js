@@ -11,8 +11,12 @@ const DEFAULTS = {
     // Master switch: false → use legacy market orders, true → use pending
     use_pending: false,
 
-    // 'limit' | 'stop' | 'auto' (executor will pick based on entry vs market)
-    pending_type: 'limit',
+    // 'limit' | 'stop' | 'auto'. 'auto' lets the executor pick limit-vs-stop from
+    // entry-vs-market each time (mt5_bridge._resolve_pending_type). The slom
+    // strategy emits breakout entries (sell below / buy above market) that are
+    // STOP orders; forcing 'limit' puts them on the wrong side of the market and
+    // the broker rejects them with 10015 Invalid price. Keep this 'auto'.
+    pending_type: 'auto',
 
     // Pending lifetime in hours; 0 = GTC (good till cancelled)
     ttl_hours: 0,

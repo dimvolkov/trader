@@ -207,6 +207,7 @@
         .b-expired  { background: rgba(120,123,134,0.2); color: #787b86; }
         .b-failed   { background: rgba(239,83,80,0.2);  color: #ef5350; }
         .b-rejected { background: rgba(239,83,80,0.2);  color: #ef5350; }
+        .b-skipped  { background: rgba(255,193,7,0.18);  color: #ffc107; }
         .b-unknown  { background: rgba(120,123,134,0.2); color: #787b86; }
 
         .b-buy  { background: rgba(38,166,154,0.2); color: #26a69a; }
@@ -373,7 +374,7 @@
                 <input type="text" class="filter-input" id="pair" placeholder="EUR/USD или пусто">
             </div>
             <div class="filter-group">
-                <label class="filter-label">Статус<span class="filter-hint">?<span class="filter-hint-popup"><div class="hint-section-title">Жизненный цикл ордера</div><div><b>placed</b> — лимитник в MT5, ждёт цену</div><div><b>filled</b> — pending сработал, позиция открыта</div><div><b>closed</b> — позиция закрыта, есть финальный профит</div><div class="hint-divider"></div><div class="hint-section-title">Не дошло до сделки</div><div><b>cancelled</b> — pending сняли до срабатывания</div><div><b>expired</b> — pending протух по TTL</div><div><b>failed</b> — MT5 не принял ордер</div><div><b>rejected</b> — отклонён ещё до отправки в MT5</div><div><b>unknown</b> — лог говорит «размещено», MT5 не подтверждает</div></span></span></label>
+                <label class="filter-label">Статус<span class="filter-hint">?<span class="filter-hint-popup"><div class="hint-section-title">Жизненный цикл ордера</div><div><b>placed</b> — лимитник в MT5, ждёт цену</div><div><b>filled</b> — pending сработал, позиция открыта</div><div><b>closed</b> — позиция закрыта, есть финальный профит</div><div class="hint-divider"></div><div class="hint-section-title">Не дошло до сделки</div><div><b>cancelled</b> — pending сняли до срабатывания</div><div><b>expired</b> — pending протух по TTL</div><div><b>failed</b> — MT5 не принял ордер</div><div><b>rejected</b> — отклонён ещё до отправки в MT5</div><div><b>skipped</b> — сканер отсеял до отправки (напр. вход слишком близко к рынку)</div><div><b>unknown</b> — лог говорит «размещено», MT5 не подтверждает</div></span></span></label>
                 <div class="status-checks" id="statusChecks">
                     <label><input type="checkbox" value="placed" checked> placed</label>
                     <label><input type="checkbox" value="filled" checked> filled</label>
@@ -382,6 +383,7 @@
                     <label><input type="checkbox" value="expired"> expired</label>
                     <label><input type="checkbox" value="failed"> failed</label>
                     <label><input type="checkbox" value="rejected"> rejected</label>
+                    <label><input type="checkbox" value="skipped"> skipped</label>
                     <label><input type="checkbox" value="unknown"> unknown</label>
                 </div>
             </div>
@@ -518,7 +520,7 @@
 
     function inferOutcome(o) {
         const s = o.status;
-        if (s === 'failed' || s === 'rejected') return 'failed';
+        if (s === 'failed' || s === 'rejected' || s === 'skipped') return 'failed';
         if (s === 'placed') return 'pending';
         if (s === 'cancelled') return 'cancelled';
         if (s === 'expired') return 'expired';
@@ -582,7 +584,7 @@
         const list = [];
 
         // 1. Placed?
-        if (status === 'failed' || status === 'rejected') {
+        if (status === 'failed' || status === 'rejected' || status === 'skipped') {
             list.push({ mark: 'no', text: `Ордер <b>не размещён</b> (${escapeHtml(status)})` });
         } else {
             list.push({ mark: 'ok', text: `Ордер размещён в MT5 (${escapeHtml(o.kind || '—')})` });
@@ -596,7 +598,7 @@
             list.push({ mark: 'skip', text: 'Ждёт исполнения' });
         } else if (status === 'cancelled' || status === 'expired') {
             list.push({ mark: 'no', text: `Не сработал — ${status === 'expired' ? 'истёк TTL' : 'отменён'}` });
-        } else if (status === 'failed' || status === 'rejected') {
+        } else if (status === 'failed' || status === 'rejected' || status === 'skipped') {
             list.push({ mark: 'skip', text: '— (ордер не дошёл до рынка)' });
         } else {
             list.push({ mark: 'skip', text: 'Статус исполнения неизвестен' });
