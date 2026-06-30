@@ -752,6 +752,54 @@ async function sendTelegram(text) {
     if (!r.ok && !r.skipped) log(`  Telegram FAILED after retries — ${r.error}`);
 }
 
+// Price formatter shared by trade notifications: 5 decimals for FX, 3 for JPY-ish.
+function _fpPrice(v) {
+    if (v == null || !isFinite(v)) return '—';
+    return Math.abs(v) >= 10 ? Number(v).toFixed(3) : Number(v).toFixed(5);
+}
+
+function _dirLabel(direction) {
+    const d = String(direction || '').toLowerCase();
+    return (d === 'up' || d === 'buy' || d === 'long') ? 'BUY ↑' : 'SELL ↓';
+}
+
+// Fired synchronously the moment an order is actually placed (not on mere signal).
+async function sendTradeOpenTelegram(pair, e, kind, ticket, volume, orderType) {
+    const head = kind === 'pending'
+        ? `📤 *Ордер выставлен*${orderType ? ` (${orderType})` : ''}`
+        : '✅ *Сделка открыта по рынку*';
+    const text = [
+        head,
+        `*${pair}* — ${_dirLabel(e.direction)}`,
+        ``,
+        `Вход: \`${_fpPrice(e.entry)}\``,
+        `Стоп: \`${_fpPrice(e.stop)}\``,
+        `Тейк: \`${_fpPrice(e.take)}\``,
+        `R:R: *1:${Number(e.rr).toFixed(1)}*`,
+        (volume ? `Объём: ${volume}` : ''),
+        (ticket != null ? `Тикет: \`${ticket}\`` : ''),
+    ].filter(Boolean).join('\n');
+    await sendTelegram(text);
+}
+
+// Fired by the trade notifier when a position is detected closed in the journal.
+async function sendTradeCloseTelegram(row) {
+    const profit = typeof row.profit === 'number' ? row.profit : 0;
+    const win = profit >= 0;
+    const head = win ? '🏁 ✅ *Сделка закрыта — профит*' : '🏁 ❌ *Сделка закрыта — убыток*';
+    const text = [
+        head,
+        `*${row.pair}* — ${_dirLabel(row.direction)}`,
+        ``,
+        `Вход: \`${_fpPrice(row.fill_price != null ? row.fill_price : row.entry)}\``,
+        `Выход: \`${_fpPrice(row.close_price)}\``,
+        `Результат: *${profit >= 0 ? '+' : ''}${profit.toFixed(2)}*`,
+        (row.rr ? `R:R план: 1:${Number(row.rr).toFixed(1)}` : ''),
+        (row.ticket != null ? `Тикет: \`${row.ticket}\`` : ''),
+    ].filter(Boolean).join('\n');
+    await sendTelegram(text);
+}
+
 // ─── Account Balance ───
 let lastAccountInfo = null;
 
@@ -891,6 +939,7 @@ async function placeMarketOrder(pair, result) {
         const data = await execFetch('POST', '/order', payload);
         if (data.success) {
             log(`  ${pair}: MARKET EXECUTED — id=${data.order_id} vol=${data.volume} price=${data.price}`);
+            await sendTradeOpenTelegram(pair, e, 'market', data.order_id, data.volume);
         } else {
             log(`  ${pair}: MARKET FAILED — ${data.error}`);
         }
@@ -1076,6 +1125,7 @@ async function placePendingOrder(pair, result, pc) {
         const data = await execFetch('POST', '/pending', payload);
         if (data.success) {
             log(`  ${pair}: PENDING PLACED — ticket=${data.ticket} type=${data.order_type} entry=${data.entry}`);
+            await sendTradeOpenTelegram(pair, e, 'pending', data.ticket, data.volume, data.order_type);
         } else {
             log(`  ${pair}: PENDING FAILED — ${data.error}`);
         }
@@ -1290,6 +1340,8 @@ async function schedulerLoop() {
     // Start pending-orders watcher (cancels stale / stop-breached pendings)
     if (CONFIG.executorUrl && CONFIG.executorSecret) {
         startPendingWatcher();
+        await initTradeNotifier();   // seed dedup state before first tick
+        startTradeNotifier();        // Telegram on position close
     }
 
     // Start AI agent daily scheduler (analysis + recommendations)
@@ -1390,6 +1442,104 @@ function startPendingWatcher() {
         pendingWatcherTick().catch(err => log(`[watcher] tick error: ${err.message}`));
     }, intervalMs);
     log(`Pending watcher started, every ${pc.watcher_interval_minutes}m`);
+}
+
+// ─── Trade notifier: Telegram on position close ───────────────────────────
+// Order-OPEN notifications fire synchronously at placement (see
+// sendTradeOpenTelegram). Closes happen on the broker side (TP/SL/manual) and
+// are only observable by polling, so this watcher tails the executor journal
+// and notifies once per newly-closed position. Notified tickets are persisted
+// so a restart doesn't re-announce, and a first run seeds (without notifying)
+// from existing history so we never blast a backlog of old trades.
+const NOTIFY_STATE_FILE = process.env.NOTIFY_STATE_FILE || '/data/notified-trades.json';
+let _notifiedClosed = new Set();
+let _notifierReady = false;   // becomes true only after dedup state is loaded/seeded
+let notifyTimer = null;
+
+function _loadNotifiedClosed() {
+    try {
+        if (fs.existsSync(NOTIFY_STATE_FILE)) {
+            const arr = JSON.parse(fs.readFileSync(NOTIFY_STATE_FILE, 'utf-8'));
+            if (Array.isArray(arr)) return new Set(arr.map(String));
+        }
+    } catch (err) {
+        log(`[notifier] could not read state: ${err.message}`);
+    }
+    return null;
+}
+
+function _saveNotifiedClosed() {
+    try {
+        // Keep the file bounded — most recent 1000 tickets is plenty for dedup.
+        const arr = Array.from(_notifiedClosed).slice(-1000);
+        _notifiedClosed = new Set(arr);
+        fs.writeFileSync(NOTIFY_STATE_FILE, JSON.stringify(arr), 'utf-8');
+    } catch (err) {
+        log(`[notifier] could not save state: ${err.message}`);
+    }
+}
+
+async function initTradeNotifier() {
+    if (!CONFIG.executorUrl || !CONFIG.executorSecret) return;
+    const existing = _loadNotifiedClosed();
+    if (existing) { _notifiedClosed = existing; _notifierReady = true; return; }
+    // First run: seed with already-closed trades so history isn't re-announced.
+    // If the executor is unreachable, stay NOT ready and persist nothing — a
+    // later tick will retry the seed. This prevents blasting a backlog when the
+    // dedup set is empty only because the seed call failed.
+    try {
+        const data = await execFetch('GET', '/journal?days=30&status=closed');
+        const seeded = new Set();
+        for (const row of (data?.rows || [])) {
+            if (row.ticket != null) seeded.add(String(row.ticket));
+        }
+        _notifiedClosed = seeded;
+        _notifierReady = true;
+        _saveNotifiedClosed();
+        log(`[notifier] seeded ${_notifiedClosed.size} existing closed trades (no backfill)`);
+    } catch (err) {
+        _notifierReady = false;
+        log(`[notifier] seed failed (${err.message}) — will retry before notifying`);
+    }
+}
+
+async function tradeNotifyTick() {
+    if (!CONFIG.executorUrl || !CONFIG.executorSecret) return;
+    // Don't notify until the dedup set is trustworthy — retry the seed first.
+    if (!_notifierReady) {
+        await initTradeNotifier();
+        if (!_notifierReady) return;
+    }
+    let data;
+    try {
+        data = await execFetch('GET', '/journal?days=7&status=closed');
+    } catch (err) {
+        log(`[notifier] journal fetch error: ${err.message}`);
+        return;
+    }
+    const rows = data?.rows || [];
+    let changed = false;
+    // Journal is newest-first; reverse so notifications arrive chronologically.
+    for (const row of rows.slice().reverse()) {
+        if (row.status !== 'closed' || row.ticket == null) continue;
+        const key = String(row.ticket);
+        if (_notifiedClosed.has(key)) continue;
+        await sendTradeCloseTelegram(row);
+        _notifiedClosed.add(key);
+        changed = true;
+    }
+    if (changed) _saveNotifiedClosed();
+}
+
+function startTradeNotifier() {
+    if (!CONFIG.executorUrl || !CONFIG.executorSecret) return;
+    const pc = pendingConfig.get();
+    const intervalMs = Math.max(1, pc.watcher_interval_minutes) * 60 * 1000;
+    if (notifyTimer) clearInterval(notifyTimer);
+    notifyTimer = setInterval(() => {
+        tradeNotifyTick().catch(err => log(`[notifier] tick error: ${err.message}`));
+    }, intervalMs);
+    log(`Trade notifier started, every ${pc.watcher_interval_minutes}m`);
 }
 
 // ─── HTTP API for frontend ───
@@ -1854,6 +2004,7 @@ const apiServer = http.createServer(async (req, res) => {
             const r = pendingConfig.update(patch);
             if (!r.success) return reply(res, 400, r);
             startPendingWatcher();   // re-init in case interval changed
+            startTradeNotifier();    // keep notifier interval in sync
             return reply(res, 200, r);
         }
 
@@ -2100,6 +2251,7 @@ const apiServer = http.createServer(async (req, res) => {
             );
             if (!r.ok) return reply(res, 400, { success: false, error: r.error });
             startPendingWatcher();   // re-init in case watcher_interval changed
+            startTradeNotifier();    // keep notifier interval in sync
             return reply(res, 200, { success: true, before: r.before, after: r.after, diff: r.diff });
         }
         if (p === '/api/agent/dismiss' && req.method === 'POST') {
