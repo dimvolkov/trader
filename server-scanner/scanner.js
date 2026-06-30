@@ -782,6 +782,22 @@ async function sendTradeOpenTelegram(pair, e, kind, ticket, volume, orderType) {
     await sendTelegram(text);
 }
 
+// Fired by the trade notifier when a pending is detected filled (now a live position).
+async function sendTradeFillTelegram(row) {
+    const text = [
+        `🟢 *Pending сработал — позиция открыта*`,
+        `*${row.pair}* — ${_dirLabel(row.direction)}`,
+        ``,
+        `Вход: \`${_fpPrice(row.fill_price != null ? row.fill_price : row.entry)}\``,
+        `Стоп: \`${_fpPrice(row.stop)}\``,
+        `Тейк: \`${_fpPrice(row.take)}\``,
+        (row.rr ? `R:R: *1:${Number(row.rr).toFixed(1)}*` : ''),
+        (row.volume ? `Объём: ${row.volume}` : ''),
+        (row.ticket != null ? `Тикет: \`${row.ticket}\`` : ''),
+    ].filter(Boolean).join('\n');
+    await sendTelegram(text);
+}
+
 // Fired by the trade notifier when a position is detected closed in the journal.
 async function sendTradeCloseTelegram(row) {
     const profit = typeof row.profit === 'number' ? row.profit : 0;
@@ -1444,23 +1460,33 @@ function startPendingWatcher() {
     log(`Pending watcher started, every ${pc.watcher_interval_minutes}m`);
 }
 
-// ─── Trade notifier: Telegram on position close ───────────────────────────
-// Order-OPEN notifications fire synchronously at placement (see
-// sendTradeOpenTelegram). Closes happen on the broker side (TP/SL/manual) and
-// are only observable by polling, so this watcher tails the executor journal
-// and notifies once per newly-closed position. Notified tickets are persisted
-// so a restart doesn't re-announce, and a first run seeds (without notifying)
-// from existing history so we never blast a backlog of old trades.
+// ─── Trade notifier: Telegram on pending fill & position close ────────────
+// Order-OPEN (placement) fires synchronously at placement (sendTradeOpenTelegram).
+// A pending FILLING into a live position and the eventual CLOSE happen on the
+// broker side and are only observable by polling, so this watcher tails the
+// executor journal and notifies once per ticket for each transition:
+//   filled → "🟢 pending сработал"   closed → "🏁 сделка закрыта".
+// Notified tickets are persisted (separate sets) so a restart doesn't
+// re-announce, and a first run seeds — without notifying — from existing
+// history so we never blast a backlog of old trades.
 const NOTIFY_STATE_FILE = process.env.NOTIFY_STATE_FILE || '/data/notified-trades.json';
+let _notifiedFilled = new Set();
 let _notifiedClosed = new Set();
 let _notifierReady = false;   // becomes true only after dedup state is loaded/seeded
 let notifyTimer = null;
 
-function _loadNotifiedClosed() {
+function _loadNotifyState() {
     try {
         if (fs.existsSync(NOTIFY_STATE_FILE)) {
-            const arr = JSON.parse(fs.readFileSync(NOTIFY_STATE_FILE, 'utf-8'));
-            if (Array.isArray(arr)) return new Set(arr.map(String));
+            const raw = JSON.parse(fs.readFileSync(NOTIFY_STATE_FILE, 'utf-8'));
+            if (raw && !Array.isArray(raw)
+                && Array.isArray(raw.filled) && Array.isArray(raw.closed)) {
+                return {
+                    filled: new Set(raw.filled.map(String)),
+                    closed: new Set(raw.closed.map(String)),
+                };
+            }
+            // Legacy format was a bare array of closed tickets → re-seed below.
         }
     } catch (err) {
         log(`[notifier] could not read state: ${err.message}`);
@@ -1468,12 +1494,14 @@ function _loadNotifiedClosed() {
     return null;
 }
 
-function _saveNotifiedClosed() {
+function _saveNotifyState() {
     try {
-        // Keep the file bounded — most recent 1000 tickets is plenty for dedup.
-        const arr = Array.from(_notifiedClosed).slice(-1000);
-        _notifiedClosed = new Set(arr);
-        fs.writeFileSync(NOTIFY_STATE_FILE, JSON.stringify(arr), 'utf-8');
+        // Keep the file bounded — most recent 1000 tickets per set is plenty.
+        const filled = Array.from(_notifiedFilled).slice(-1000);
+        const closed = Array.from(_notifiedClosed).slice(-1000);
+        _notifiedFilled = new Set(filled);
+        _notifiedClosed = new Set(closed);
+        fs.writeFileSync(NOTIFY_STATE_FILE, JSON.stringify({ filled, closed }), 'utf-8');
     } catch (err) {
         log(`[notifier] could not save state: ${err.message}`);
     }
@@ -1481,22 +1509,31 @@ function _saveNotifiedClosed() {
 
 async function initTradeNotifier() {
     if (!CONFIG.executorUrl || !CONFIG.executorSecret) return;
-    const existing = _loadNotifiedClosed();
-    if (existing) { _notifiedClosed = existing; _notifierReady = true; return; }
-    // First run: seed with already-closed trades so history isn't re-announced.
-    // If the executor is unreachable, stay NOT ready and persist nothing — a
-    // later tick will retry the seed. This prevents blasting a backlog when the
-    // dedup set is empty only because the seed call failed.
-    try {
-        const data = await execFetch('GET', '/journal?days=30&status=closed');
-        const seeded = new Set();
-        for (const row of (data?.rows || [])) {
-            if (row.ticket != null) seeded.add(String(row.ticket));
-        }
-        _notifiedClosed = seeded;
+    const existing = _loadNotifyState();
+    if (existing) {
+        _notifiedFilled = existing.filled;
+        _notifiedClosed = existing.closed;
         _notifierReady = true;
-        _saveNotifiedClosed();
-        log(`[notifier] seeded ${_notifiedClosed.size} existing closed trades (no backfill)`);
+        return;
+    }
+    // First run: seed already-filled/closed tickets so history isn't re-announced.
+    // If the executor is unreachable, stay NOT ready and persist nothing — a
+    // later tick retries the seed instead of blasting the backlog.
+    try {
+        const data = await execFetch('GET', '/journal?days=30');
+        const filled = new Set();
+        const closed = new Set();
+        for (const row of (data?.rows || [])) {
+            if (row.ticket == null) continue;
+            const key = String(row.ticket);
+            if (row.status === 'closed') { closed.add(key); filled.add(key); }
+            else if (row.status === 'filled') filled.add(key);
+        }
+        _notifiedFilled = filled;
+        _notifiedClosed = closed;
+        _notifierReady = true;
+        _saveNotifyState();
+        log(`[notifier] seeded ${filled.size} filled / ${closed.size} closed (no backfill)`);
     } catch (err) {
         _notifierReady = false;
         log(`[notifier] seed failed (${err.message}) — will retry before notifying`);
@@ -1505,14 +1542,14 @@ async function initTradeNotifier() {
 
 async function tradeNotifyTick() {
     if (!CONFIG.executorUrl || !CONFIG.executorSecret) return;
-    // Don't notify until the dedup set is trustworthy — retry the seed first.
+    // Don't notify until the dedup sets are trustworthy — retry the seed first.
     if (!_notifierReady) {
         await initTradeNotifier();
         if (!_notifierReady) return;
     }
     let data;
     try {
-        data = await execFetch('GET', '/journal?days=7&status=closed');
+        data = await execFetch('GET', '/journal?days=7');
     } catch (err) {
         log(`[notifier] journal fetch error: ${err.message}`);
         return;
@@ -1521,14 +1558,24 @@ async function tradeNotifyTick() {
     let changed = false;
     // Journal is newest-first; reverse so notifications arrive chronologically.
     for (const row of rows.slice().reverse()) {
-        if (row.status !== 'closed' || row.ticket == null) continue;
+        if (row.ticket == null) continue;
         const key = String(row.ticket);
-        if (_notifiedClosed.has(key)) continue;
-        await sendTradeCloseTelegram(row);
-        _notifiedClosed.add(key);
-        changed = true;
+        if (row.status === 'filled') {
+            if (_notifiedFilled.has(key)) continue;
+            await sendTradeFillTelegram(row);
+            _notifiedFilled.add(key);
+            changed = true;
+        } else if (row.status === 'closed') {
+            // A position can fill+close within one poll window — mark it filled
+            // too (no separate fill ping for an already-closed trade).
+            if (!_notifiedFilled.has(key)) _notifiedFilled.add(key);
+            if (_notifiedClosed.has(key)) continue;
+            await sendTradeCloseTelegram(row);
+            _notifiedClosed.add(key);
+            changed = true;
+        }
     }
-    if (changed) _saveNotifiedClosed();
+    if (changed) _saveNotifyState();
 }
 
 function startTradeNotifier() {
