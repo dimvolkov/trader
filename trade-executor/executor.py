@@ -39,6 +39,10 @@ import mt5_bridge
 API_SECRET = os.getenv("EXECUTOR_API_SECRET", "change-me-to-a-real-secret")
 MAX_OPEN_POSITIONS = int(os.getenv("MAX_OPEN_POSITIONS", "5"))
 MAX_PENDING_ORDERS = int(os.getenv("MAX_PENDING_ORDERS", "10"))
+# Idempotency: a pending request whose direction matches and whose entry/SL/TP
+# all sit within this many points of an already-live pending on the same symbol
+# is rejected instead of placed, so repeated scans cannot stack duplicates.
+DEDUP_TOLERANCE_POINTS = float(os.getenv("DEDUP_TOLERANCE_POINTS", "10"))
 LOG_FILE = os.getenv("LOG_FILE", "C:/trade-executor/trades.log")
 
 # ─── Logging ───
@@ -287,6 +291,36 @@ async def close_order(ticket: int, x_api_secret: str = Header(None)):
 
 
 # ─── Endpoints: pending orders ───
+def _find_duplicate_pending(symbol: str, direction: str,
+                            entry: float, stop: float, take: float):
+    """Return an existing live pending on `symbol` placed by us that represents
+    the same setup (same direction, entry/SL/TP within DEDUP_TOLERANCE_POINTS),
+    or None. Last-line-of-defence against stacked duplicate orders — fires even
+    when the scanner-side replace/dedup did not run (retries, races, restarts,
+    or two scanner instances)."""
+    listing = mt5_bridge.get_pending_orders(symbol=symbol)
+    if not listing.get("success"):
+        return None
+
+    info = mt5_bridge.get_symbol_info(symbol)
+    point = info.get("point") if info.get("success") else None
+    tol = (point or 0) * DEDUP_TOLERANCE_POINTS
+    if tol <= 0:
+        tol = abs(entry) * 1e-5
+
+    want_buy = direction == "buy"
+    for o in listing.get("orders", []):
+        if o.get("magic") != mt5_bridge.MAGIC_PENDING:
+            continue
+        if str(o.get("type", "")).lower().startswith("buy") != want_buy:
+            continue
+        if (abs(o["price_open"] - entry) <= tol
+                and abs(o["sl"] - stop) <= tol
+                and abs(o["tp"] - take) <= tol):
+            return o
+    return None
+
+
 @app.post("/pending")
 async def create_pending(req: PendingRequest, x_api_secret: str = Header(None)):
     """
@@ -310,6 +344,27 @@ async def create_pending(req: PendingRequest, x_api_secret: str = Header(None)):
             "signal_context": req.signal_context,
         })
         return {"success": False, "error": msg}
+
+    # Duplicate guard (idempotency): refuse to stack an order matching one that
+    # is already live on this symbol. Logged so repeated-scan attempts are visible.
+    dup = _find_duplicate_pending(symbol, direction, req.entry, req.stop, req.take)
+    if dup is not None:
+        logger.warning(
+            f"Pending duplicate skipped: {req.pair} {direction} "
+            f"entry={req.entry} — matches live ticket {dup['ticket']}"
+        )
+        log_trade({
+            "action": "pending_duplicate_skipped",
+            "pair": req.pair,
+            "direction": direction,
+            "entry": req.entry, "stop": req.stop, "take": req.take,
+            "rr": req.rr,
+            "duplicate_ticket": dup["ticket"],
+            "duplicate": {"price_open": dup["price_open"], "sl": dup["sl"], "tp": dup["tp"]},
+            "tolerance_points": DEDUP_TOLERANCE_POINTS,
+            "signal_context": req.signal_context,
+        })
+        return {"success": False, "error": "duplicate", "duplicate_ticket": dup["ticket"]}
 
     # Volume
     volume = req.volume

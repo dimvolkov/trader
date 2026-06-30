@@ -899,6 +899,21 @@ async function placeMarketOrder(pair, result) {
     }
 }
 
+// Two live pendings represent the "same setup" when direction matches and
+// entry/SL/TP all coincide within tolPrice. Used to make placement idempotent:
+// a repeated scan of an unchanged signal must not stack a second identical order.
+function pendingMatchesSignal(order, e, tolPrice) {
+    const typeName = String(order.type || '').toLowerCase();
+    const orderIsBuy = typeName.startsWith('buy');
+    const signalIsBuy = e.direction === 'up';
+    if (orderIsBuy !== signalIsBuy) return false;
+    const close = (a, b) =>
+        Number.isFinite(a) && Number.isFinite(b) && Math.abs(a - b) <= tolPrice;
+    return close(order.price_open, e.entry)
+        && close(order.sl, e.stop)
+        && close(order.tp, e.take);
+}
+
 async function placePendingOrder(pair, result, pc) {
     const e = result.entry;
 
@@ -932,19 +947,57 @@ async function placePendingOrder(pair, result, pc) {
         }
     }
 
-    // Replace policy: cancel existing pending on this pair before placing new
-    if (pc.replace_existing_pending) {
+    // ─── Idempotency / replace / cap ──────────────────────────────────────
+    // Snapshot what is already live on this pair so every decision below is
+    // logged and the same signal can never stack duplicate orders. (The
+    // executor enforces the same guard server-side as a last line of defence.)
+    let pairOrders = [];
+    try {
+        const pl = await execFetch('GET', `/pending?pair=${encodeURIComponent(pair)}`);
+        if (pl.success && Array.isArray(pl.orders)) pairOrders = pl.orders;
+        else if (pl && pl.success === false) {
+            log(`  ${pair}: WARN list pendings failed — ${pl.error || 'unknown'}`);
+        }
+    } catch (err) {
+        log(`  ${pair}: WARN could not list existing pendings — ${err.message}`);
+    }
+
+    const tolPrice = (market && market.point > 0)
+        ? pc.dedup_tolerance_points * market.point
+        : Math.abs(e.entry) * 1e-5;
+    const duplicate = pairOrders.find(o => pendingMatchesSignal(o, e, tolPrice));
+    const stale = pairOrders.filter(o => !pendingMatchesSignal(o, e, tolPrice));
+
+    // Structured, greppable decision record — one line per placement attempt.
+    log(`  [pending-decision] ${pair} dir=${e.direction} entry=${e.entry} sl=${e.stop} tp=${e.take} `
+        + `rr=${e.rr.toFixed(2)} live_on_pair=${pairOrders.length} `
+        + `dup_ticket=${duplicate ? duplicate.ticket : 'none'} stale=${stale.length} `
+        + `tol_pts=${pc.dedup_tolerance_points} replace=${pc.replace_existing_pending}`);
+
+    // Guard: never place a second order for a setup that is already live, no
+    // matter the replace flag. This is the fix for stacked identical pendings.
+    if (duplicate) {
+        log(`  ${pair}: SKIPPED pending — duplicate of live ticket=${duplicate.ticket} `
+            + `(entry=${duplicate.price_open} sl=${duplicate.sl} tp=${duplicate.tp})`);
+        return;
+    }
+
+    // Replace policy: drop only *stale* pendings (a genuinely different setup)
+    // on this pair before placing the new one.
+    if (pc.replace_existing_pending && stale.length > 0) {
         try {
             const cdata = await execFetch('POST', `/pending/cancel-by-pair/${encodeURIComponent(pair.replace('/', ''))}?reason=replace`);
             if (cdata.success && cdata.cancelled && cdata.cancelled.length > 0) {
-                log(`  ${pair}: cancelled ${cdata.cancelled.length} old pending(s)`);
+                log(`  ${pair}: cancelled ${cdata.cancelled.length} stale pending(s) before replace`);
+            } else if (cdata && cdata.success === false) {
+                log(`  ${pair}: WARN cancel-by-pair failed — ${cdata.error || 'unknown'}`);
             }
         } catch (err) {
             log(`  ${pair}: cancel-by-pair error — ${err.message}`);
         }
     }
 
-    // Hard cap on simultaneous pendings
+    // Hard cap on simultaneous pendings (across all pairs)
     try {
         const list = await execFetch('GET', '/pending');
         if (list.success && list.orders && list.orders.length >= pc.max_pending_total) {

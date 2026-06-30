@@ -20,6 +20,14 @@ const DEFAULTS = {
     // Drop old pending on same pair before placing new one
     replace_existing_pending: true,
 
+    // Idempotency guard: a new pending is treated as a duplicate of one already
+    // live on the same pair when direction matches AND entry/SL/TP all coincide
+    // within this many points. Such an order is skipped (never stacked), so a
+    // repeated scan of an unchanged signal cannot pile up identical orders even
+    // if replace_existing_pending is off or the cancel-by-pair call fails.
+    // 0 = exact match only. Enforced both scanner-side and executor-side.
+    dedup_tolerance_points: 10,
+
     // Skip placement if current market price drifted from entry by more than
     // (this fraction × distance entry→take). Example: 0.5 means if price is
     // halfway to TP already, R:R is destroyed — skip.
@@ -130,6 +138,7 @@ const RANGES = {
     min_samples_for_winrate:     { min: 1,      max: 10000 },
     winrate_lookback_days:       { min: 1,      max: 365 },
     max_pending_total:           { min: 1,      max: 100 },
+    dedup_tolerance_points:      { min: 0,      max: 1000, integer: true },
     h1_swing_lookback:           { min: 2,      max: 10,   integer: true },
     m30_swing_lookback:          { min: 2,      max: 10,   integer: true },
     pullback_zone_ratio:         { min: 0.2,    max: 0.8 },
@@ -179,6 +188,7 @@ function _validate(patch) {
         'ttl_hours', 'max_distance_pct_from_entry', 'watcher_max_age_hours',
         'watcher_interval_minutes', 'min_rr', 'min_winrate_threshold',
         'min_samples_for_winrate', 'winrate_lookback_days', 'max_pending_total',
+        'dedup_tolerance_points',
         'h1_swing_lookback', 'm30_swing_lookback', 'pullback_zone_ratio',
         'min_pullback_ratio', 'breakout_tolerance_pct', 'stop_buffer_ratio', 'min_h1_candles',
         'min_swings_required',
