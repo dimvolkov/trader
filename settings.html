@@ -294,6 +294,41 @@
             border-color: #ef5350;
         }
         .btn-danger:hover { background: #d33b38; }
+        .tg-hist-list { margin-top: 10px; max-height: 460px; overflow-y: auto; }
+        .tg-hist-row {
+            border: 1px solid #2a2e39;
+            border-left: 3px solid #2a2e39;
+            border-radius: 6px;
+            padding: 8px 10px;
+            margin-bottom: 8px;
+            background: #171b26;
+        }
+        .tg-hist-row.hist-ok   { border-left-color: #26a69a; }
+        .tg-hist-row.hist-fail { border-left-color: #ef5350; }
+        .tg-hist-meta {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            flex-wrap: wrap;
+            font-size: 11px;
+            margin-bottom: 6px;
+        }
+        .tg-hist-time { color: #787b86; font-family: monospace; }
+        .tg-hist-kind {
+            font-weight: 600;
+            color: #d1d4dc;
+            background: rgba(41, 98, 255, 0.15);
+            padding: 1px 7px;
+            border-radius: 10px;
+        }
+        .tg-hist-text {
+            margin: 0;
+            font-family: monospace;
+            font-size: 12px;
+            color: #b2b5be;
+            white-space: pre-wrap;
+            word-break: break-word;
+        }
     </style>
 </head>
 <body>
@@ -608,6 +643,28 @@
                 </div>
                 <div class="test-result" id="tgTestResult"></div>
             </div>
+
+            <div class="source-card">
+                <div class="source-header">
+                    <span class="source-name">История уведомлений</span>
+                    <span id="tgHistBadge"><span class="source-badge badge-empty">—</span></span>
+                </div>
+                <div class="source-info">
+                    Все отправленные в Telegram сообщения за последние 90 дней: сигналы,
+                    открытие/закрытие сделок, срабатывание pending, баланс.<br>
+                    Требуется admin-секрет (задаётся в разделе «Отложенные ордера»).
+                </div>
+                <div class="btn-row" style="margin-bottom:8px">
+                    <button class="btn btn-primary" onclick="tgLoadHistory()" id="tgHistBtn">Загрузить</button>
+                    <select id="tgHistLimit" class="field-select" style="max-width:170px">
+                        <option value="100">Последние 100</option>
+                        <option value="500" selected>Последние 500</option>
+                        <option value="2000">Последние 2000</option>
+                    </select>
+                </div>
+                <div class="test-result" id="tgHistResult"></div>
+                <div id="tgHistList"></div>
+            </div>
         </div>
 
     </div>
@@ -902,6 +959,77 @@
         };
 
         initTelegram();
+
+        // --- Telegram notification history ---
+        function tgEscapeHtml(s) {
+            return String(s ?? '')
+                .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+        }
+
+        // Classify a message by its header line so the UI can label each entry.
+        function tgHistKind(text) {
+            const t = text || '';
+            if (t.includes('📊')) return 'Сигнал';
+            if (t.includes('Pending сработал') || t.includes('🟢')) return 'Pending сработал';
+            if (t.includes('Сделка закрыта') || t.includes('🏁')) return 'Закрытие';
+            if (t.includes('Ордер выставлен') || t.includes('📤')) return 'Ордер (pending)';
+            if (t.includes('Сделка открыта') || t.includes('✅')) return 'Сделка (market)';
+            if (t.includes('Баланс счёта') || t.includes('💰')) return 'Баланс';
+            return 'Прочее';
+        }
+
+        function tgRenderHistory(rows, total) {
+            const listEl = document.getElementById('tgHistList');
+            if (!rows.length) {
+                listEl.innerHTML = '<div class="field-help">История пуста — уведомления ещё не отправлялись.</div>';
+                return;
+            }
+            const html = rows.map(r => {
+                const d = new Date(r.ts);
+                const when = isNaN(d) ? '—' : d.toLocaleString('ru-RU');
+                const status = r.ok
+                    ? `<span class="test-ok">✓ отправлено${r.downgraded ? ' [plain]' : ''}</span>`
+                    : `<span class="test-fail">✗ ошибка: ${tgEscapeHtml(r.error || 'неизвестно')}</span>`;
+                return `
+                    <div class="tg-hist-row ${r.ok ? 'hist-ok' : 'hist-fail'}">
+                        <div class="tg-hist-meta">
+                            <span class="tg-hist-time">${when}</span>
+                            <span class="tg-hist-kind">${tgHistKind(r.text)}</span>
+                            ${status}
+                        </div>
+                        <pre class="tg-hist-text">${tgEscapeHtml(r.text)}</pre>
+                    </div>`;
+            }).join('');
+            listEl.innerHTML = `<div class="tg-hist-list">${html}</div>`;
+        }
+
+        window.tgLoadHistory = async function () {
+            const btn = document.getElementById('tgHistBtn');
+            const out = document.getElementById('tgHistResult');
+            const badge = document.getElementById('tgHistBadge');
+            const limit = document.getElementById('tgHistLimit').value || '500';
+            if (!pcAdminSecret()) {
+                pcShow(out, 'Не задан admin-секрет (раздел «Отложенные ордера»)', 'fail');
+                return;
+            }
+            btn.disabled = true;
+            pcShow(out, 'Загрузка...', 'loading');
+            try {
+                const r = await pcFetch('/api/telegram-history?limit=' + encodeURIComponent(limit));
+                if (!r.success) {
+                    pcShow(out, 'Ошибка: ' + (r.error || 'fail'), 'fail');
+                    return;
+                }
+                const rows = r.history || [];
+                badge.innerHTML = `<span class="source-badge badge-active">${r.total} за 90 дн.</span>`;
+                out.innerHTML = '';
+                tgRenderHistory(rows, r.total);
+            } catch (err) {
+                pcShow(out, 'Сеть: ' + err.message, 'fail');
+            } finally {
+                btn.disabled = false;
+            }
+        };
 
         // ─────────────────────────── Pending Orders settings ───────────────────────────
         const PC_FIELDS = [

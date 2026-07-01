@@ -668,15 +668,69 @@ function analyzePair(h1Candles, m30Candles, pc) {
     return result;
 }
 
+// ─── Telegram notification history (persisted, ~3-month retention) ───
+// Every outbound Telegram message (signal, order open, pending fill, position
+// close, balance, cycle summary) is appended here so the settings UI can show a
+// searchable log. Without this the sends are fire-and-forget — lost to stdout.
+const TG_HISTORY_FILE = process.env.TELEGRAM_HISTORY_FILE || '/data/telegram-history.json';
+const TG_HISTORY_MAX_AGE_MS = 90 * 24 * 60 * 60 * 1000;   // 3 months
+const TG_HISTORY_MAX_ROWS = 5000;                          // hard safety cap
+let _tgHistory = null;   // lazy-loaded array of { ts, text, ok, downgraded, error }
+
+function _tgHistoryLoad() {
+    if (_tgHistory) return _tgHistory;
+    _tgHistory = [];
+    try {
+        if (fs.existsSync(TG_HISTORY_FILE)) {
+            const raw = JSON.parse(fs.readFileSync(TG_HISTORY_FILE, 'utf-8'));
+            if (Array.isArray(raw)) _tgHistory = raw;
+        }
+    } catch (err) {
+        log(`[tg-history] could not read: ${err.message}`);
+    }
+    return _tgHistory;
+}
+
+function _tgHistoryPrune(list) {
+    const cutoff = Date.now() - TG_HISTORY_MAX_AGE_MS;
+    let out = list.filter(r => r && typeof r.ts === 'number' && r.ts >= cutoff);
+    if (out.length > TG_HISTORY_MAX_ROWS) out = out.slice(-TG_HISTORY_MAX_ROWS);
+    return out;
+}
+
+function recordTelegramHistory(entry) {
+    try {
+        const list = _tgHistoryLoad();
+        list.push(entry);
+        _tgHistory = _tgHistoryPrune(list);
+        fs.writeFileSync(TG_HISTORY_FILE, JSON.stringify(_tgHistory), 'utf-8');
+    } catch (err) {
+        log(`[tg-history] could not save: ${err.message}`);
+    }
+}
+
 // ─── Telegram ───
 // Low-level Telegram sender, shared by all notifications.
 // - Retries on transient network failure ("fetch failed") and 429/5xx, since
 //   connectivity from the scanner host to api.telegram.org is intermittent.
 // - Falls back to plain text (no parse_mode) when Telegram rejects the
 //   Markdown with 400, so a card is never silently lost to a formatting slip.
+// - Every non-skipped attempt (success or final failure) is appended to the
+//   persisted history via recordTelegramHistory() so the settings UI can list it.
 // Returns { ok, skipped?, downgraded?, error? }.
 async function postTelegram(text, { retries = 3 } = {}) {
     if (!CONFIG.telegramBotToken || !CONFIG.telegramChatId) return { ok: false, skipped: true };
+    // Records the outcome to the persisted history, then returns it unchanged.
+    const done = (result) => {
+        recordTelegramHistory({
+            ts: Date.now(),
+            text,
+            ok: !!result.ok,
+            downgraded: !!result.downgraded,
+            error: result.error || null,
+        });
+        return result;
+    };
     const url = `https://api.telegram.org/bot${CONFIG.telegramBotToken}/sendMessage`;
     const send = (useMarkdown) => fetchWithTimeout(url, {
         method: 'POST',
@@ -692,12 +746,12 @@ async function postTelegram(text, { retries = 3 } = {}) {
     for (let attempt = 1; attempt <= retries; attempt++) {
         try {
             const res = await send(true);
-            if (res.ok) return { ok: true };
+            if (res.ok) return done({ ok: true });
             const data = await res.json().catch(() => ({}));
             // Markdown parse error → retry once as plain text.
             if (res.status === 400) {
                 const plain = await send(false);
-                if (plain.ok) return { ok: true, downgraded: true };
+                if (plain.ok) return done({ ok: true, downgraded: true });
                 const pdata = await plain.json().catch(() => ({}));
                 lastErr = `HTTP ${plain.status}: ${pdata.description || data.description || 'Bad Request'}`;
             } else {
@@ -708,7 +762,7 @@ async function postTelegram(text, { retries = 3 } = {}) {
         }
         if (attempt < retries) await delay(1500 * attempt);
     }
-    return { ok: false, error: lastErr };
+    return done({ ok: false, error: lastErr });
 }
 
 async function sendTelegramNotification(pair, result) {
@@ -2174,6 +2228,15 @@ const apiServer = http.createServer(async (req, res) => {
             const pair = parsed.query.pair;
             if (!pair) return reply(res, 400, { success: false, error: 'pair query param required' });
             return reply(res, 200, { success: true, pair, history: scanHistoryByPair[pair] || [] });
+        }
+
+        // ─── Telegram notification history (persisted, ~3-month retention) ───
+        if (p === '/api/telegram-history' && req.method === 'GET') {
+            if (!requireAdmin(req)) return reply(res, 401, { success: false, error: 'admin secret required' });
+            const list = _tgHistoryLoad();
+            const limit = Math.min(Math.max(parseInt(parsed.query.limit, 10) || 500, 1), 2000);
+            const rows = list.slice(-limit).reverse();   // newest first
+            return reply(res, 200, { success: true, total: list.length, retentionDays: 90, history: rows });
         }
 
         // ─── Candle history (SQLite) ───
