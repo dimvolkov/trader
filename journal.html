@@ -397,6 +397,7 @@
             </div>
             <button class="btn" onclick="loadJournal()">Обновить</button>
             <button class="btn btn-secondary" onclick="exportCSV()">Экспорт CSV</button>
+            <button class="btn btn-secondary" id="copyAllBtn" onclick="copyAllRows()">Копировать всё</button>
         </div>
 
         <div class="table-wrap">
@@ -961,6 +962,35 @@
         a.download = `journal_${new Date().toISOString().slice(0,10)}.csv`;
         a.click();
         URL.revokeObjectURL(url);
+    };
+
+    window.copyAllRows = async function() {
+        const rows = displayedRows.length ? displayedRows : lastRows;
+        if (!rows.length) return;
+        const cols = ['timestamp','pair','kind','direction','entry','stop','take','rr','volume','ticket','status','fill_price','close_price','profit','reason'];
+        const headers = ['Время','Пара','Тип','Напр.','Entry','SL','TP','R:R','Объём','Тикет','Статус','Fill цена','Close цена','Профит','Причина / Заметка'];
+        const lines = rows.map(r => cols.map(c => {
+            const v = r[c];
+            return (v === null || v === undefined) ? '' : String(v).replace(/[\t\n]/g, ' ');
+        }).join('\t'));
+        const text = [headers.join('\t'), ...lines].join('\n');
+        const btn = document.getElementById('copyAllBtn');
+        const orig = btn.textContent;
+        try {
+            await navigator.clipboard.writeText(text);
+            btn.textContent = `Скопировано (${rows.length})`;
+        } catch (err) {
+            const ta = document.createElement('textarea');
+            ta.value = text;
+            ta.style.position = 'fixed';
+            ta.style.opacity = '0';
+            document.body.appendChild(ta);
+            ta.select();
+            try { document.execCommand('copy'); btn.textContent = `Скопировано (${rows.length})`; }
+            catch (e) { btn.textContent = 'Не удалось'; }
+            document.body.removeChild(ta);
+        }
+        setTimeout(() => { btn.textContent = orig; }, 1800);
     };
 
     document.getElementById('kind').addEventListener('change', () => renderRows(applyClientFilter(lastRows)));
