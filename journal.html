@@ -209,6 +209,10 @@
         .b-rejected { background: rgba(239,83,80,0.2);  color: #ef5350; }
         .b-skipped  { background: rgba(255,193,7,0.18);  color: #ffc107; }
         .b-unknown  { background: rgba(120,123,134,0.2); color: #787b86; }
+        /* signal-log dispositions */
+        .b-belowminrr { background: rgba(255,152,0,0.2);  color: #ff9800; }
+        .b-invalid    { background: rgba(239,83,80,0.2);  color: #ef5350; }
+        .b-signalonly { background: rgba(41,98,255,0.2);  color: #2962ff; }
 
         .b-buy  { background: rgba(38,166,154,0.2); color: #26a69a; }
         .b-sell { background: rgba(239,83,80,0.2);  color: #ef5350; }
@@ -221,9 +225,19 @@
         .p-pos { color: #26a69a; font-weight: 700; }
         .p-neg { color: #ef5350; font-weight: 700; }
         .muted { color: #4a4e59; }
+        .view-note { color: #787b86; font-size: 12.5px; line-height: 1.5; margin: 0 0 14px; max-width: 900px; }
 
         .toggle { cursor: pointer; color: #787b86; user-select: none; }
         .toggle:hover { color: #fff; }
+
+        .tabs { display: flex; gap: 4px; margin-bottom: 16px; border-bottom: 1px solid #2a2e39; }
+        .tab {
+            padding: 9px 18px; cursor: pointer; background: none; border: none;
+            color: #787b86; font-size: 13px; font-weight: 600;
+            border-bottom: 2px solid transparent; margin-bottom: -1px;
+        }
+        .tab:hover { color: #d1d4dc; }
+        .tab.active { color: #fff; border-bottom-color: #2962ff; }
 
         .error {
             background: rgba(239,83,80,0.15);
@@ -344,6 +358,16 @@
         .order-tooltip .tt-narrative.warn { border-left-color: #ff9800; }
         .order-tooltip .tt-narrative.neutral { border-left-color: #787b86; }
         .order-tooltip .tt-narrative b { color: #fff; }
+        .order-tooltip .tt-sub {
+            margin-top: 10px; margin-bottom: 2px;
+            font-size: 10.5px; text-transform: uppercase;
+            letter-spacing: .04em; color: #787b86; font-weight: 600;
+        }
+        .order-tooltip .tt-sub:first-child { margin-top: 0; }
+        .order-tooltip a.tt-strat-link {
+            color: #2962ff; text-decoration: none; border-bottom: 1px dotted #2962ff;
+        }
+        .order-tooltip a.tt-strat-link:hover { color: #5b8cff; border-bottom-style: solid; }
     </style>
 </head>
 <body>
@@ -362,6 +386,12 @@
     <div class="content">
         <div id="errorBox"></div>
 
+        <div class="tabs">
+            <button class="tab active" id="tab-orders" onclick="switchTab('orders')">Ордера</button>
+            <button class="tab" id="tab-signals" onclick="switchTab('signals')">Найденные входы</button>
+        </div>
+
+        <div id="view-orders">
         <div class="summary" id="summary"></div>
 
         <div class="filters">
@@ -427,6 +457,62 @@
                 </tbody>
             </table>
         </div>
+        </div><!-- /view-orders -->
+
+        <div id="view-signals" style="display:none">
+            <p class="view-note">История каждого входа, который нашла стратегия «Слом» — и взятого, и отсеянного фильтром. Наведи на строку, чтобы увидеть обоснование по фазам стратегии. Копи данных для последующей настройки порогов.</p>
+            <div class="summary" id="signalSummary"></div>
+
+            <div class="filters">
+                <div class="filter-group">
+                    <label class="filter-label">Период (дней)</label>
+                    <input type="number" class="filter-input" id="sigDays" value="30" min="1" max="365">
+                </div>
+                <div class="filter-group">
+                    <label class="filter-label">Пара</label>
+                    <input type="text" class="filter-input" id="sigPair" placeholder="EUR/USD или пусто">
+                </div>
+                <div class="filter-group">
+                    <label class="filter-label">Диспозиция<span class="filter-hint">?<span class="filter-hint-popup"><div class="hint-section-title">Что сканер сделал с найденным входом</div><div><b>placed</b> — вход взят, ордер размещён</div><div><b>below_min_rr</b> — R:R ниже порога, фильтр не пропустил</div><div><b>skipped</b> — отсеян фильтром (близко к рынку, лимит pending, winrate, дубль…)</div><div><b>failed</b> — MT5 не принял ордер</div><div><b>signal_only</b> — автоторговля выключена, только зафиксирован</div><div><b>invalid</b> — вырожденный сигнал (стоп ≈ вход)</div></span></span></label>
+                    <select class="filter-select" id="sigDisposition">
+                        <option value="">Все</option>
+                        <option value="placed">placed (взят)</option>
+                        <option value="below_min_rr">below_min_rr</option>
+                        <option value="skipped">skipped</option>
+                        <option value="failed">failed</option>
+                        <option value="signal_only">signal_only</option>
+                        <option value="invalid">invalid</option>
+                    </select>
+                </div>
+                <button class="btn" onclick="loadSignals()">Обновить</button>
+                <button class="btn btn-secondary" onclick="exportSignalsCSV()">Экспорт CSV</button>
+            </div>
+
+            <div class="table-wrap">
+                <table id="signalTable">
+                    <thead>
+                        <tr>
+                            <th>Время</th>
+                            <th>Пара</th>
+                            <th>Напр.</th>
+                            <th>Тренд</th>
+                            <th>Фаза</th>
+                            <th>S1/S2/S3</th>
+                            <th>Entry</th>
+                            <th>SL</th>
+                            <th>TP</th>
+                            <th>R:R</th>
+                            <th>Диспозиция</th>
+                            <th>Тикет</th>
+                            <th>Причина</th>
+                        </tr>
+                    </thead>
+                    <tbody id="signalBody">
+                        <tr><td colspan="13" class="empty">Введите admin secret в настройках и нажмите «Обновить»</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </div><!-- /view-signals -->
     </div>
 
     <div class="order-tooltip" id="orderTooltip" style="display:none;"></div>
@@ -434,6 +520,7 @@
     <script>
     let lastRows = [];
     let displayedRows = [];
+    let ordersDisplayed = [];   // last-rendered order rows (for tab-switch restore)
 
     function adminSecret() {
         return localStorage.getItem('scannerAdminSecret') || '';
@@ -648,6 +735,88 @@
         return list;
     }
 
+    // Deep-link into the strategy doc so the reasoning is traceable to the rules.
+    // stopPropagation keeps the click from also pinning/unpinning the tooltip.
+    function stratLink(anchor, label) {
+        return `<a class="tt-strat-link" href="strategy.html#${anchor}" target="_blank" rel="noopener" onclick="event.stopPropagation()">${label}</a>`;
+    }
+
+    // "Почему вошли" — reconstructs the entry reasoning from signal_context and
+    // ties every step to a phase of the active «Слом» strategy, so it's clear
+    // why THIS trading situation was selected (not just what happened after).
+    function buildEntryRationale(o) {
+        const ctx = o.signal_context || {};
+        const pair = escapeHtml(o.pair || '');
+        const dir = dirLabel(o.direction);
+        const t = String(ctx.trend || o.direction || '').toLowerCase();
+        const isUp = t === 'up' || t === 'buy';
+        const isDown = t === 'down' || t === 'sell';
+
+        const manual = ctx.manual === true || ctx.manual === 'true' || ctx.source === 'manual';
+        const external = o.source === 'mt5_only' && !o.signal_context;
+
+        if (external) {
+            return { kind: 'neutral', text: `Ордер по <b>${pair}</b> заведён <b>вне сканера</b> (напрямую в MT5). Контекст стратегии не сохранён — соответствие «Слому» восстановить нельзя.` };
+        }
+        if (manual) {
+            const note = ctx.note ? ` Заметка трейдера: «${escapeHtml(ctx.note)}».` : '';
+            return { kind: 'neutral', text: `Ордер <b>${dir}</b> по <b>${pair}</b> размещён <b>вручную</b>, не по автосигналу сканера — правила «Слома» к нему не применялись.${note}` };
+        }
+        if (!o.signal_context) {
+            return { kind: 'neutral', text: `Контекст сигнала для этого ордера не сохранён — детально восстановить логику входа по стратегии нельзя.` };
+        }
+
+        const parts = [];
+        parts.push(`Вход по активной стратегии ${stratLink('strategy-description', '«Слом»')} — импульсно-коррекционный анализ: тренд по H1 → паттерн из трёх сигналов на M30.`);
+
+        // Фаза 1 — тренд H1 определяет направление
+        if (isUp || isDown) {
+            const trendWord = isUp ? 'восходящий ↑' : 'нисходящий ↓';
+            const onlyWord = isUp ? 'только покупки (LONG)' : 'только продажи (SHORT)';
+            parts.push(`${stratLink('phase-1', 'Фаза&nbsp;1 (тренд H1)')}: определён <b>${trendWord}</b> тренд, поэтому по правилу «только в сторону старшего тренда» рассматривались ${onlyWord}.`);
+        } else {
+            parts.push(`${stratLink('phase-1', 'Фаза&nbsp;1 (тренд H1)')}: выраженного тренда нет (боковик) — ситуация нестандартная для стратегии.`);
+        }
+
+        // Фаза 2 — продолжение или разворот
+        if (ctx.reversal) {
+            parts.push(`${stratLink('phase-2', 'Фаза&nbsp;2 (разворот)')}: замечены признаки разворота (${escapeHtml(ctx.reversalReason || 'коррекция превысила импульс')}) — вход повышенного риска.`);
+        } else if (ctx.reversalReason) {
+            parts.push(`${stratLink('phase-2', 'Фаза&nbsp;2')}: структура подтвердила <b>продолжение</b> тренда (${escapeHtml(ctx.reversalReason)}).`);
+        }
+        if (ctx.phase && ctx.phase !== '—') {
+            parts.push(`Текущая фаза структуры H1 — <b>${escapeHtml(ctx.phase)}</b>.`);
+        }
+
+        // Фаза 4 — паттерн «Слом» на M30
+        const sig = [];
+        if (ctx.s1) sig.push('С1 (импульс)');
+        if (ctx.s2) sig.push('С2 (коррекция к пробитому уровню)');
+        if (ctx.s3) sig.push('С3 (новый импульс дальше С1)');
+        if (sig.length === 3) {
+            parts.push(`${stratLink('phase-4', 'Фаза&nbsp;4 (паттерн «Слом» M30)')}: подтверждены все три сигнала — ${sig.join(', ')}; микротренд M30 сломлен в сторону тренда H1.`);
+        } else if (sig.length) {
+            parts.push(`${stratLink('phase-4', 'Фаза&nbsp;4 («Слом» M30)')}: подтверждены сигналы ${sig.join(', ')} (вход дан по С2 в ожидании С3).`);
+        }
+
+        // Фаза 5 — вход и стоп
+        parts.push(`${stratLink('phase-5', 'Фаза&nbsp;5 (вход)')}: точка входа <b>${fpPrice(o.entry)}</b> на коррекции после первого импульса слома; стоп <b>${fpPrice(o.stop)}</b> за уровень слома (буфер 50% между С1 и С2) — там сценарий отменяется.`);
+
+        // Фаза 6 — тейк и R:R
+        const rrTxt = o.rr != null ? ` R:R <b>1:${o.rr.toFixed(2)}</b>, прошло фильтр минимального R:R —` : '';
+        parts.push(`${stratLink('phase-6', 'Фаза&nbsp;6 (управление)')}: тейк <b>${fpPrice(o.take)}</b> на ближайшем целевом уровне H1;${rrTxt} поэтому ситуация признана торговой.`);
+
+        // Расчётный потенциал сделки
+        const pp = ctx.potentialProfit, pl = ctx.potentialLoss;
+        if (pp != null || pl != null) {
+            const ppTxt = pp != null ? '+' + Number(pp).toFixed(2) : '—';
+            const plTxt = pl != null ? '−' + Number(pl).toFixed(2) : '—';
+            parts.push(`Расчётный потенциал: <b>${ppTxt}</b> против риска <b>${plTxt}</b>.`);
+        }
+
+        return { kind: 'neutral', text: parts.join(' ') };
+    }
+
     function buildOrderVerdict(o) {
         const outcome = inferOutcome(o);
         const pair = escapeHtml(o.pair || '');
@@ -733,8 +902,12 @@
         }
 
         html += `</div><div class="tt-col-right">`;
+        const r = buildEntryRationale(o);
         const v = buildOrderVerdict(o);
         html += `<h4>Что случилось</h4>`;
+        html += `<div class="tt-sub">Почему вошли (стратегия)</div>`;
+        html += `<div class="tt-narrative ${r.kind}">${r.text}</div>`;
+        html += `<div class="tt-sub">Итог</div>`;
         html += `<div class="tt-narrative ${v.kind}">${v.text}</div>`;
 
         // Timing
@@ -753,13 +926,15 @@
     const orderTooltipEl = document.getElementById('orderTooltip');
     let orderTooltipVisible = false;
     let orderTooltipPinned = false;
+    // Which builder the shared tooltip uses — set by whichever table last rendered.
+    let tooltipBuilder = buildOrderTooltipHtml;
 
     function renderTooltipInto(o, pinned) {
         const close = `<button class="tt-close" onclick="unpinOrderTooltip()" title="Закрыть">✕</button>`;
         const hint = pinned
             ? `<div class="tt-hint">Закреплено — выделите и скопируйте текст. Esc или ✕ — закрыть.</div>`
             : `<div class="tt-hint">Клик на строке закрепит подсказку для копирования</div>`;
-        orderTooltipEl.innerHTML = close + buildOrderTooltipHtml(o) + hint;
+        orderTooltipEl.innerHTML = close + tooltipBuilder(o) + hint;
     }
     function showOrderTooltip(idx, event) {
         if (orderTooltipPinned) return;
@@ -871,6 +1046,8 @@
 
     function renderRows(rows) {
         displayedRows = rows;
+        ordersDisplayed = rows;
+        tooltipBuilder = buildOrderTooltipHtml;
         const tbody = document.getElementById('journalBody');
         if (!rows.length) {
             tbody.innerHTML = '<tr><td colspan="16" class="empty">Нет данных за выбранный период</td></tr>';
@@ -997,6 +1174,199 @@
     document.querySelectorAll('#statusChecks input').forEach(c => {
         c.addEventListener('change', () => renderRows(applyClientFilter(lastRows)));
     });
+
+    // ─── "Найденные входы" tab: durable log of every setup the strategy found ───
+    let signalRows = [];        // raw records from /api/signals
+    let signalShaped = [];      // order-like shapes for the shared tooltip
+    let signalsLoaded = false;
+
+    const DISP_META = {
+        placed:       { label: 'Взят',            cls: 'placed' },
+        below_min_rr: { label: 'R:R ниже порога', cls: 'belowminrr' },
+        skipped:      { label: 'Отсеян',          cls: 'skipped' },
+        failed:       { label: 'Сбой MT5',        cls: 'failed' },
+        signal_only:  { label: 'Только сигнал',   cls: 'signalonly' },
+        invalid:      { label: 'Невалидный',      cls: 'invalid' },
+        unknown:      { label: 'Неизвестно',      cls: 'unknown' },
+    };
+    function dispBadge(d) {
+        const m = DISP_META[d] || { label: d || '—', cls: 'unknown' };
+        return `<span class="badge b-${m.cls}">${escapeHtml(m.label)}</span>`;
+    }
+
+    // Reshape a signal-log record into the {o} shape buildEntryRationale expects,
+    // so the tooltip's «Почему вошли» renders identically to the order journal.
+    function shapeSignal(s) {
+        return {
+            pair: s.pair,
+            direction: s.direction,
+            entry: s.entry, stop: s.stop, take: s.take,
+            rr: (typeof s.rr === 'number') ? s.rr : null,
+            timestamp: s.time,
+            signal_context: {
+                trend: s.trend, phase: s.phase,
+                s1: s.s1, s2: s.s2, s3: s.s3,
+                reversal: s.reversal, reversalReason: s.reversalReason,
+                potentialProfit: s.potentialProfit, potentialLoss: s.potentialLoss,
+            },
+            disposition: s.disposition, reason: s.reason, ticket: s.ticket,
+            config_snapshot: s.config_snapshot,
+        };
+    }
+
+    function buildDispositionNarrative(o) {
+        const reason = o.reason ? escapeHtml(o.reason) : '';
+        switch (o.disposition) {
+            case 'placed':
+                return { kind: 'ok', text: `🟢 Вход <b>взят</b> — ордер размещён${o.ticket ? ` (тикет ${o.ticket})` : ''}. Исход сделки смотри во вкладке «Ордера».` };
+            case 'below_min_rr':
+                return { kind: 'warn', text: `Сетап найден, но <b>R:R ниже порога</b> min_rr — фильтр не пропустил. ${reason}` };
+            case 'skipped':
+                return { kind: 'neutral', text: `Сетап найден, но <b>отсеян фильтром</b>: ${reason || 'без причины'}. Ордер не размещался.` };
+            case 'failed':
+                return { kind: 'no', text: `Вход был валиден, но <b>MT5 отклонил</b> размещение: ${reason || '—'}.` };
+            case 'signal_only':
+                return { kind: 'neutral', text: `Автоторговля выключена — сетап только <b>зафиксирован</b>, ордер не отправлялся.` };
+            case 'invalid':
+                return { kind: 'no', text: `<b>Вырожденный сигнал</b>: ${reason || 'стоп совпал со входом'}.` };
+            default:
+                return { kind: 'neutral', text: `Диспозиция: ${escapeHtml(o.disposition || 'неизвестна')}.` };
+        }
+    }
+
+    function buildSignalTooltipHtml(o) {
+        let html = `<div class="tt-title"><span>${escapeHtml(o.pair || '—')}</span>${dispBadge(o.disposition)}</div>`;
+        html += `<div class="tt-body"><div class="tt-col-left">`;
+        html += `<h4>Контекст входа</h4>`;
+        html += buildOrderContextItems(o);
+        html += `</div><div class="tt-col-right">`;
+        const r = buildEntryRationale(o);
+        const d = buildDispositionNarrative(o);
+        html += `<h4>Почему вошли (стратегия)</h4>`;
+        html += `<div class="tt-narrative ${r.kind}">${r.text}</div>`;
+        html += `<div class="tt-sub">Что сделал сканер</div>`;
+        html += `<div class="tt-narrative ${d.kind}">${d.text}</div>`;
+        html += `</div></div>`;
+        return html;
+    }
+
+    function renderSignalSummary(total, stats) {
+        stats = stats || {};
+        const placed = stats.placed || 0;
+        const tiles = [
+            ['Найдено входов', total, ''],
+            ['Взято (placed)', placed, 'positive'],
+            ['Не взято', total - placed, ''],
+            ['R:R ниже порога', stats.below_min_rr || 0, ''],
+            ['Отсеяно фильтром', stats.skipped || 0, ''],
+            ['Сбой MT5', stats.failed || 0, ''],
+        ];
+        document.getElementById('signalSummary').innerHTML = tiles.map(([l, v, k]) => `
+            <div class="stat">
+                <div class="stat-label">${l}</div>
+                <div class="stat-value ${k ? 'stat-' + k : ''}">${v}</div>
+            </div>
+        `).join('');
+    }
+
+    function renderSignalRows() {
+        signalShaped = signalRows.map(shapeSignal);
+        displayedRows = signalShaped;
+        tooltipBuilder = buildSignalTooltipHtml;
+        const tbody = document.getElementById('signalBody');
+        if (!signalRows.length) {
+            tbody.innerHTML = '<tr><td colspan="13" class="empty">Нет найденных входов за выбранный период</td></tr>';
+            return;
+        }
+        tbody.innerHTML = signalRows.map((s, i) => {
+            const dir = (s.direction || '').toLowerCase();
+            const dirB = badge(dir === 'up' ? 'buy' : dir === 'down' ? 'sell' : dir);
+            const trendLabel = s.trend === 'up' ? '↑ up' : s.trend === 'down' ? '↓ down' : s.trend === 'range' ? '↔ range' : (s.trend || '—');
+            const sig = `${s.s1 ? '①' : '·'}${s.s2 ? '②' : '·'}${s.s3 ? '③' : '·'}`;
+            return `
+                <tr data-idx="${i}" onmouseenter="rowMouseEnter(${i}, event)" onmousemove="rowMouseMove(event)" onmouseleave="rowMouseLeave()" onclick="rowClick(${i}, event)">
+                    <td>${fmtTime(s.time)}</td>
+                    <td><strong>${escapeHtml(s.pair || '')}</strong></td>
+                    <td>${dirB}</td>
+                    <td>${escapeHtml(trendLabel)}</td>
+                    <td>${escapeHtml(s.phase || '—')}</td>
+                    <td style="letter-spacing:1px">${sig}</td>
+                    <td>${fmtNum(s.entry)}</td>
+                    <td>${fmtNum(s.stop)}</td>
+                    <td>${fmtNum(s.take)}</td>
+                    <td>${typeof s.rr === 'number' ? s.rr.toFixed(2) : '<span class="muted">—</span>'}</td>
+                    <td>${dispBadge(s.disposition)}</td>
+                    <td>${s.ticket || '<span class="muted">—</span>'}</td>
+                    <td>${escapeHtml(s.reason || '')}</td>
+                </tr>
+            `;
+        }).join('');
+    }
+
+    window.loadSignals = async function() {
+        if (!adminSecret()) {
+            showError('Не задан admin secret. Перейди в <a href="settings.html" style="color:#2962ff">настройки</a>, введи его и сохрани.');
+            return;
+        }
+        showError('');
+        const days = document.getElementById('sigDays').value || 30;
+        const pair = document.getElementById('sigPair').value.trim();
+        const disposition = document.getElementById('sigDisposition').value;
+        const params = new URLSearchParams({ days });
+        if (pair) params.set('pair', pair);
+        if (disposition) params.set('disposition', disposition);
+        try {
+            const res = await fetch('/api/signals?' + params.toString(), {
+                headers: { 'X-Admin-Secret': adminSecret() },
+            });
+            const data = await res.json();
+            if (!data.success) { showError('Ошибка: ' + (data.error || 'fail')); return; }
+            signalRows = data.signals || [];
+            signalsLoaded = true;
+            renderSignalSummary(data.total || signalRows.length, data.stats);
+            renderSignalRows();
+        } catch (err) {
+            showError('Сеть: ' + err.message);
+        }
+    };
+
+    window.exportSignalsCSV = function() {
+        if (!signalRows.length) return;
+        const cols = ['time','pair','direction','trend','phase','s1','s2','s3','entry','stop','take','rr','disposition','ticket','reason','potentialProfit','potentialLoss'];
+        const lines = signalRows.map(r => cols.map(c => {
+            const v = r[c];
+            if (v === null || v === undefined) return '';
+            const st = String(v).replace(/"/g, '""');
+            return /[",\n]/.test(st) ? `"${st}"` : st;
+        }).join(','));
+        const csv = [cols.join(','), ...lines].join('\n');
+        const blob = new Blob([csv], { type: 'text/csv' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `signals_${new Date().toISOString().slice(0,10)}.csv`;
+        a.click();
+        URL.revokeObjectURL(url);
+    };
+
+    window.switchTab = function(name) {
+        unpinOrderTooltip();
+        const isOrders = name === 'orders';
+        document.getElementById('view-orders').style.display = isOrders ? '' : 'none';
+        document.getElementById('view-signals').style.display = isOrders ? 'none' : '';
+        document.getElementById('tab-orders').classList.toggle('active', isOrders);
+        document.getElementById('tab-signals').classList.toggle('active', !isOrders);
+        if (isOrders) {
+            displayedRows = ordersDisplayed;
+            tooltipBuilder = buildOrderTooltipHtml;
+        } else {
+            displayedRows = signalShaped;
+            tooltipBuilder = buildSignalTooltipHtml;
+            if (!signalsLoaded) loadSignals();
+        }
+    };
+
+    document.getElementById('sigDisposition').addEventListener('change', () => loadSignals());
 
     loadJournal();
     </script>

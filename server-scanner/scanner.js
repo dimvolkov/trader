@@ -709,6 +709,56 @@ function recordTelegramHistory(entry) {
     }
 }
 
+// ─── Found-entry signal log (persisted, append-only JSONL) ───
+// Every setup the strategy FINDS is recorded here — whether it became an order
+// or was dropped by a filter — with the full rationale (the same signal_context
+// fields the order payload carries) and a `disposition` describing what the
+// scanner did with it. Unlike scanHistoryByPair (in-memory, 20 rows/pair, no
+// rationale) this survives restarts, so the strategy can be reviewed and tuned
+// over time. Read by the "Найденные входы" tab in the journal via /api/signals.
+const SIGNAL_LOG_FILE = process.env.SIGNAL_LOG_FILE || '/data/signal-log.jsonl';
+const SIGNAL_LOG_MAX_ROWS = 20000;              // hard safety cap
+let _signalLog = null;   // lazy-loaded array of found-entry records
+
+function _signalLogLoad() {
+    if (_signalLog) return _signalLog;
+    _signalLog = [];
+    try {
+        if (fs.existsSync(SIGNAL_LOG_FILE)) {
+            const lines = fs.readFileSync(SIGNAL_LOG_FILE, 'utf-8').split('\n');
+            for (const ln of lines) {
+                const s = ln.trim();
+                if (!s) continue;
+                try { _signalLog.push(JSON.parse(s)); } catch { /* skip corrupt line */ }
+            }
+            if (_signalLog.length > SIGNAL_LOG_MAX_ROWS) {
+                _signalLog = _signalLog.slice(-SIGNAL_LOG_MAX_ROWS);
+            }
+        }
+    } catch (err) {
+        log(`[signal-log] could not read: ${err.message}`);
+    }
+    return _signalLog;
+}
+
+// Append one found-entry record. Best-effort: a logging failure must never
+// block the scan cycle. Bounds the file by rewriting from the capped array
+// once it overflows, so on-disk size tracks the in-memory cap.
+function recordFoundEntry(rec) {
+    try {
+        const list = _signalLogLoad();
+        list.push(rec);
+        if (list.length > SIGNAL_LOG_MAX_ROWS) {
+            _signalLog = list.slice(-SIGNAL_LOG_MAX_ROWS);
+            fs.writeFileSync(SIGNAL_LOG_FILE, _signalLog.map(r => JSON.stringify(r)).join('\n') + '\n', 'utf-8');
+        } else {
+            fs.appendFileSync(SIGNAL_LOG_FILE, JSON.stringify(rec) + '\n', 'utf-8');
+        }
+    } catch (err) {
+        log(`[signal-log] could not save: ${err.message}`);
+    }
+}
+
 // ─── Telegram ───
 // Low-level Telegram sender, shared by all notifications.
 // - Retries on transient network failure ("fetch failed") and 429/5xx, since
@@ -773,7 +823,8 @@ async function sendTelegramNotification(pair, result) {
 
     const e = result.entry;
     const dir = e.direction === 'up' ? 'LONG ↑' : 'SHORT ↓';
-    const fp = (v) => v >= 10 ? v.toFixed(2) : v.toFixed(5);
+    // Exact value, no rounding — traders need the full precision of the level.
+    const fp = (v) => (v == null || !isFinite(v)) ? '—' : String(Number(v));
 
     const chartUrl = `https://${CONFIG.domain}/index.html?pair=${encodeURIComponent(pair)}&tf=30&analyze=1&dir=${e.direction}&entry=${e.entry}&stop=${e.stop}&take=${e.take}&rr=${e.rr.toFixed(2)}`;
 
@@ -806,10 +857,11 @@ async function sendTelegram(text) {
     if (!r.ok && !r.skipped) log(`  Telegram FAILED after retries — ${r.error}`);
 }
 
-// Price formatter shared by trade notifications: 5 decimals for FX, 3 for JPY-ish.
+// Price formatter shared by trade notifications: exact value, no rounding —
+// traders need the full precision of entry/stop/take/fill/close levels.
 function _fpPrice(v) {
     if (v == null || !isFinite(v)) return '—';
-    return Math.abs(v) >= 10 ? Number(v).toFixed(3) : Number(v).toFixed(5);
+    return String(Number(v));
 }
 
 function _dirLabel(direction) {
@@ -960,9 +1012,12 @@ async function getCurrentMarketPrice(pair) {
     }
 }
 
+// Returns a disposition { disposition, reason?, ticket? } describing what became
+// of the found setup, so the caller can persist it to the signal log.
+// disposition ∈ placed | failed | skipped | below_min_rr | signal_only.
 async function sendOrderToExecutor(pair, result) {
     if (!CONFIG.executorUrl || !CONFIG.executorSecret || !CONFIG.autoTrade) {
-        return;
+        return { disposition: 'signal_only', reason: 'автоторговля выключена' };
     }
 
     const pc = pendingConfig.get();
@@ -971,22 +1026,23 @@ async function sendOrderToExecutor(pair, result) {
     // Common R:R override
     if (typeof pc.min_rr === 'number' && e.rr < pc.min_rr) {
         log(`  ${pair}: SKIPPED — R:R ${e.rr.toFixed(2)} < min_rr ${pc.min_rr}`);
-        return;
+        return { disposition: 'below_min_rr', reason: `R:R ${e.rr.toFixed(2)} < min_rr ${pc.min_rr}` };
     }
 
     // Adaptive: skip if historical winrate on this pair is too low
     if (pc.min_winrate_threshold > 0) {
         const wr = await getPairWinrate(pair, pc.winrate_lookback_days);
         if (wr && wr.trades >= pc.min_samples_for_winrate && wr.winrate < pc.min_winrate_threshold) {
-            log(`  ${pair}: SKIPPED — historic winrate ${(wr.winrate*100).toFixed(0)}% (${wr.trades} trades) < threshold ${(pc.min_winrate_threshold*100).toFixed(0)}%`);
-            return;
+            const reason = `historic winrate ${(wr.winrate*100).toFixed(0)}% (${wr.trades} trades) < threshold ${(pc.min_winrate_threshold*100).toFixed(0)}%`;
+            log(`  ${pair}: SKIPPED — ${reason}`);
+            return { disposition: 'skipped', reason };
         }
     }
 
     if (pc.use_pending) {
-        await placePendingOrder(pair, result, pc);
+        return await placePendingOrder(pair, result, pc);
     } else {
-        await placeMarketOrder(pair, result);
+        return await placeMarketOrder(pair, result);
     }
 }
 
@@ -1010,11 +1066,14 @@ async function placeMarketOrder(pair, result) {
         if (data.success) {
             log(`  ${pair}: MARKET EXECUTED — id=${data.order_id} vol=${data.volume} price=${data.price}`);
             await sendTradeOpenTelegram(pair, e, 'market', data.order_id, data.volume);
+            return { disposition: 'placed', ticket: data.order_id };
         } else {
             log(`  ${pair}: MARKET FAILED — ${data.error}`);
+            return { disposition: 'failed', reason: data.error };
         }
     } catch (err) {
         log(`  ${pair}: EXECUTOR ERROR — ${err.message}`);
+        return { disposition: 'failed', reason: err.message };
     }
 }
 
@@ -1064,8 +1123,9 @@ async function placePendingOrder(pair, result, pc) {
             ? Math.max(0, refPrice - e.entry)
             : Math.max(0, e.entry - refPrice);
         if (totalDist > 0 && moved / totalDist > pc.max_distance_pct_from_entry) {
-            log(`  ${pair}: SKIPPED pending — price drifted ${((moved/totalDist)*100).toFixed(0)}% towards take (> ${(pc.max_distance_pct_from_entry*100).toFixed(0)}%)`);
-            return;
+            const reason = `цена ушла на ${((moved/totalDist)*100).toFixed(0)}% к тейку (> ${(pc.max_distance_pct_from_entry*100).toFixed(0)}%) — R:R потерян`;
+            log(`  ${pair}: SKIPPED pending — ${reason}`);
+            return { disposition: 'skipped', reason };
         }
     }
 
@@ -1080,8 +1140,9 @@ async function placePendingOrder(pair, result, pc) {
         const tpDist = Math.abs(e.entry - e.take);
         if (slDist < minDist || tpDist < minDist) {
             const d = market.digits || 5;
-            log(`  ${pair}: SKIPPED pending — stops too tight (SL ${slDist.toFixed(d)}, TP ${tpDist.toFixed(d)} < broker min ${minDist.toFixed(d)} = ${market.stops_level} pts)`);
-            return;
+            const reason = `стопы слишком узкие (SL ${slDist.toFixed(d)}, TP ${tpDist.toFixed(d)} < мин. брокера ${minDist.toFixed(d)} = ${market.stops_level} пт)`;
+            log(`  ${pair}: SKIPPED pending — ${reason}`);
+            return { disposition: 'skipped', reason };
         }
     }
 
@@ -1101,7 +1162,7 @@ async function placePendingOrder(pair, result, pc) {
                 + `(min ${minDist.toFixed(d)} = ${market.stops_level} pts)`;
             log(`  ${pair}: SKIPPED pending — ${reason}`);
             await recordSkip(pair, e, reason);
-            return;
+            return { disposition: 'skipped', reason };
         }
     }
 
@@ -1137,7 +1198,7 @@ async function placePendingOrder(pair, result, pc) {
     if (duplicate) {
         log(`  ${pair}: SKIPPED pending — duplicate of live ticket=${duplicate.ticket} `
             + `(entry=${duplicate.price_open} sl=${duplicate.sl} tp=${duplicate.tp})`);
-        return;
+        return { disposition: 'skipped', reason: `дубликат живого ордера (тикет ${duplicate.ticket})` };
     }
 
     // Replace policy: drop only *stale* pendings (a genuinely different setup)
@@ -1159,8 +1220,9 @@ async function placePendingOrder(pair, result, pc) {
     try {
         const list = await execFetch('GET', '/pending');
         if (list.success && list.orders && list.orders.length >= pc.max_pending_total) {
-            log(`  ${pair}: SKIPPED pending — already ${list.orders.length} active (max ${pc.max_pending_total})`);
-            return;
+            const reason = `лимит одновременных pending достигнут (${list.orders.length}/${pc.max_pending_total})`;
+            log(`  ${pair}: SKIPPED pending — ${reason}`);
+            return { disposition: 'skipped', reason };
         }
     } catch {}
 
@@ -1196,11 +1258,14 @@ async function placePendingOrder(pair, result, pc) {
         if (data.success) {
             log(`  ${pair}: PENDING PLACED — ticket=${data.ticket} type=${data.order_type} entry=${data.entry}`);
             await sendTradeOpenTelegram(pair, e, 'pending', data.ticket, data.volume, data.order_type);
+            return { disposition: 'placed', ticket: data.ticket };
         } else {
             log(`  ${pair}: PENDING FAILED — ${data.error}`);
+            return { disposition: 'failed', reason: data.error };
         }
     } catch (err) {
         log(`  ${pair}: EXECUTOR ERROR — ${err.message}`);
+        return { disposition: 'failed', reason: err.message };
     }
 }
 
@@ -1285,6 +1350,7 @@ async function runScanCycle() {
         const scanTime = new Date().toISOString();
         let result = null;
         let errMsg = null;
+        let disposition = null;   // what became of a found setup (for the signal log)
 
         try {
             const h1 = await fetchTimeSeries(pair, '1h');
@@ -1298,9 +1364,14 @@ async function runScanCycle() {
             if (result.entry && result.entry.valid) {
                 log(`  ${pair}: SIGNAL FOUND! ${result.entry.direction === 'up' ? 'LONG' : 'SHORT'} R:R=${result.rr.toFixed(2)}`);
                 await sendTelegramNotification(pair, result);
-                await sendOrderToExecutor(pair, result);
+                disposition = await sendOrderToExecutor(pair, result);
             } else if (result.entry && !result.entry.valid) {
                 log(`  ${pair}: signal present but ${result.entry.reason}`);
+                // Near-miss: a setup formed but computeEntry rejected it (almost
+                // always R:R below the floor, occasionally a degenerate stop).
+                disposition = /R:R/i.test(result.entry.reason || '')
+                    ? { disposition: 'below_min_rr', reason: result.entry.reason }
+                    : { disposition: 'invalid', reason: result.entry.reason };
             } else if (result.trend === 'range') {
                 log(`  ${pair}: no trend (range)`);
             } else {
@@ -1336,6 +1407,41 @@ async function runScanCycle() {
         });
         if (scanHistoryByPair[pair].length > SCAN_HISTORY_MAX) {
             scanHistoryByPair[pair] = scanHistoryByPair[pair].slice(-SCAN_HISTORY_MAX);
+        }
+
+        // Durable signal log: persist every FOUND setup (valid entry or near-miss)
+        // with the full rationale + what the scanner did with it, so the strategy
+        // can be reviewed and tuned over time. No-signal / range scans are not
+        // "found entries" and are intentionally skipped here.
+        if (result && result.entry) {
+            const e = result.entry;
+            const pcSnap = pendingConfig.get();
+            recordFoundEntry({
+                time: scanTime,
+                pair,
+                direction: e.direction,
+                trend: result.trend,
+                phase: result.phase,
+                s1: result.s1, s2: result.s2, s3: result.s3,
+                reversal: result.reversal,
+                reversalReason: result.reversalReason,
+                entry: e.entry, stop: e.stop, take: e.take,
+                rr: isFinite(e.rr) ? e.rr : null,
+                potentialProfit: e.potentialProfit,
+                potentialLoss: e.potentialLoss,
+                valid: !!e.valid,
+                disposition: (disposition && disposition.disposition) || (e.valid ? 'unknown' : 'invalid'),
+                reason: (disposition && disposition.reason) || (e.valid ? null : e.reason),
+                ticket: (disposition && disposition.ticket) || null,
+                config_snapshot: {
+                    min_rr: pcSnap.min_rr,
+                    stop_buffer_ratio: pcSnap.stop_buffer_ratio,
+                    ttl_hours: pcSnap.ttl_hours,
+                    use_pending: pcSnap.use_pending,
+                    pending_type: pcSnap.pending_type,
+                    max_pending_total: pcSnap.max_pending_total,
+                },
+            });
         }
 
         cycleSummary.push({
@@ -2237,6 +2343,25 @@ const apiServer = http.createServer(async (req, res) => {
             const limit = Math.min(Math.max(parseInt(parsed.query.limit, 10) || 500, 1), 2000);
             const rows = list.slice(-limit).reverse();   // newest first
             return reply(res, 200, { success: true, total: list.length, retentionDays: 90, history: rows });
+        }
+
+        // ─── Found-entry signal log (persisted, for the "Найденные входы" tab) ───
+        if (p === '/api/signals' && req.method === 'GET') {
+            if (!requireAdmin(req)) return reply(res, 401, { success: false, error: 'admin secret required' });
+            const q = parsed.query;
+            let rows = _signalLogLoad().slice();
+            if (q.pair) rows = rows.filter(r => r.pair === q.pair);
+            if (q.disposition) rows = rows.filter(r => r.disposition === q.disposition);
+            if (q.days) {
+                const cutoff = Date.now() - Math.max(1, parseInt(q.days, 10) || 30) * 86400000;
+                rows = rows.filter(r => { const t = Date.parse(r.time); return !isNaN(t) && t >= cutoff; });
+            }
+            // Disposition histogram over the filtered set (drives the stat strip).
+            const stats = {};
+            for (const r of rows) stats[r.disposition] = (stats[r.disposition] || 0) + 1;
+            const limit = Math.min(Math.max(parseInt(q.limit, 10) || 1000, 1), 5000);
+            const out = rows.slice(-limit).reverse();   // newest first
+            return reply(res, 200, { success: true, total: rows.length, stats, signals: out });
         }
 
         // ─── Candle history (SQLite) ───
