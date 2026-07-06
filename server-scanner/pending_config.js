@@ -102,6 +102,13 @@ const DEFAULTS = {
     allowed_hours_msk: [],
     // List of allowed weekdays (0=Mon..6=Sun). Empty = all days.
     allowed_weekdays: [],
+
+    // ─── Daily Telegram report (end-of-day summary) ───
+    // Seeded from env on first run; once edited in the settings UI it lives here
+    // and the scanner honours it live (no restart needed).
+    daily_report_enabled: process.env.DAILY_REPORT_ENABLED !== 'false',
+    // MSK hour [0..23] at which the report is sent.
+    daily_report_hour: parseInt(process.env.DAILY_REPORT_MSK_HOUR || '22', 10),
 };
 
 let _cached = null;
@@ -151,6 +158,7 @@ const RANGES = {
     stop_buffer_ratio:           { min: 0.1,    max: 1.5 },
     min_h1_candles:              { min: 10,     max: 50,   integer: true },
     min_swings_required:         { min: 3,      max: 8,    integer: true },
+    daily_report_hour:           { min: 0,      max: 23,   integer: true },
 };
 
 function _checkNumRange(name, v, errors) {
@@ -187,6 +195,9 @@ function _validate(patch) {
     if (patch.cancel_on_stop_breach !== undefined && typeof patch.cancel_on_stop_breach !== 'boolean') {
         errors.push('cancel_on_stop_breach must be boolean');
     }
+    if (patch.daily_report_enabled !== undefined && typeof patch.daily_report_enabled !== 'boolean') {
+        errors.push('daily_report_enabled must be boolean');
+    }
     // Numeric ranges
     const numeric = [
         'ttl_hours', 'max_distance_pct_from_entry', 'watcher_max_age_hours',
@@ -195,7 +206,7 @@ function _validate(patch) {
         'dedup_tolerance_points',
         'h1_swing_lookback', 'm30_swing_lookback', 'pullback_zone_ratio',
         'min_pullback_ratio', 'breakout_tolerance_pct', 'stop_buffer_ratio', 'min_h1_candles',
-        'min_swings_required',
+        'min_swings_required', 'daily_report_hour',
     ];
     for (const k of numeric) {
         if (patch[k] !== undefined) _checkNumRange(k, patch[k], errors);

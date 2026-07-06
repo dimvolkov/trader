@@ -58,6 +58,10 @@ const CONFIG = {
     // Anthropic Claude (strategy chat assistant)
     anthropicApiKey: process.env.ANTHROPIC_API_KEY || '',
     anthropicModel: process.env.CLAUDE_MODEL || 'claude-sonnet-4-6',
+
+    // Daily Telegram report (end-of-day summary) is configured live via
+    // pending_config (daily_report_enabled / daily_report_hour), seeded from the
+    // DAILY_REPORT_ENABLED / DAILY_REPORT_MSK_HOUR env vars on first run.
 };
 
 const MAX_RISK = CONFIG.deposit * CONFIG.riskPct;
@@ -126,6 +130,26 @@ function getMoscowWeekday() {
     const mskDate = new Date(mskMs);
     // getUTCDay returns 0=Sun..6=Sat; remap to 0=Mon..6=Sun
     return (mskDate.getUTCDay() + 6) % 7;
+}
+
+// Calendar date (YYYY-MM-DD) in MSK for an epoch-ms instant. Used to bucket the
+// day's activity for the daily report so events line up with the trader's day.
+function moscowDateStrOf(ms) {
+    const d = new Date(ms + 3 * 60 * 60 * 1000);
+    const y = d.getUTCFullYear();
+    const m = String(d.getUTCMonth() + 1).padStart(2, '0');
+    const day = String(d.getUTCDate()).padStart(2, '0');
+    return `${y}-${m}-${day}`;
+}
+
+function getMoscowDateStr() {
+    return moscowDateStrOf(Date.now());
+}
+
+// Pretty DD.MM.YYYY for a YYYY-MM-DD MSK date string (report headers).
+function formatRuDate(dateStr) {
+    const [y, m, d] = String(dateStr).split('-');
+    return (y && m && d) ? `${d}.${m}.${y}` : dateStr;
 }
 
 function isInTimeWindow() {
@@ -757,6 +781,57 @@ function recordFoundEntry(rec) {
     } catch (err) {
         log(`[signal-log] could not save: ${err.message}`);
     }
+}
+
+// ─── Daily activity counters (persisted, keyed by MSK date) ───
+// Most day-report figures are derived at report time from durable sources —
+// found/placed from the signal log, fills/closes/cancels/profit from the
+// executor journal (by fill_time/close_time/cancel_time). The one number that
+// isn't recoverable after the fact is HOW MANY scan cycles ran (no-signal scans
+// leave no trace), so we accumulate that here as cycles happen.
+const DAILY_STATS_FILE = process.env.DAILY_STATS_FILE || '/data/daily-stats.json';
+const DAILY_STATS_MAX_DAYS = 120;   // retention cap
+let _dailyStats = null;   // lazy-loaded { 'YYYY-MM-DD': { scans } }
+
+function _dailyStatsLoad() {
+    if (_dailyStats) return _dailyStats;
+    _dailyStats = {};
+    try {
+        if (fs.existsSync(DAILY_STATS_FILE)) {
+            const raw = JSON.parse(fs.readFileSync(DAILY_STATS_FILE, 'utf-8'));
+            if (raw && typeof raw === 'object' && !Array.isArray(raw)) _dailyStats = raw;
+        }
+    } catch (err) {
+        log(`[daily-stats] could not read: ${err.message}`);
+    }
+    return _dailyStats;
+}
+
+function _dailyStatsPrune(obj) {
+    const keys = Object.keys(obj).sort();          // ascending YYYY-MM-DD
+    if (keys.length > DAILY_STATS_MAX_DAYS) {
+        for (const k of keys.slice(0, keys.length - DAILY_STATS_MAX_DAYS)) delete obj[k];
+    }
+    return obj;
+}
+
+// Increment today's counter for `field` (best-effort; never blocks the scan).
+function bumpDailyStat(field, amount = 1) {
+    try {
+        const store = _dailyStatsLoad();
+        const day = getMoscowDateStr();
+        if (!store[day]) store[day] = {};
+        store[day][field] = (store[day][field] || 0) + amount;
+        _dailyStats = _dailyStatsPrune(store);
+        fs.writeFileSync(DAILY_STATS_FILE, JSON.stringify(_dailyStats), 'utf-8');
+    } catch (err) {
+        log(`[daily-stats] could not save: ${err.message}`);
+    }
+}
+
+function getDailyStat(dateStr, field) {
+    const store = _dailyStatsLoad();
+    return (store[dateStr] && store[dateStr][field]) || 0;
 }
 
 // ─── Telegram ───
@@ -1457,6 +1532,9 @@ async function runScanCycle() {
     scanState.isScanning = false;
     scanState.finishedAt = new Date().toISOString();
 
+    // One completed scan cycle → the day's scan tally (for the daily report).
+    bumpDailyStat('scans');
+
     log(`=== Scan complete ===`);
 
     // Final summary to Telegram so it's clear the cycle finished (and what it
@@ -1519,6 +1597,9 @@ async function schedulerLoop() {
         await initTradeNotifier();   // seed dedup state before first tick
         startTradeNotifier();        // Telegram on position close
     }
+
+    // Start end-of-day report scheduler (Telegram summary of the trading day)
+    startDailyReportScheduler();
 
     // Start AI agent daily scheduler (analysis + recommendations)
     if (process.env.AI_AGENT_ENABLED === 'true' && CONFIG.anthropicApiKey
@@ -1747,6 +1828,206 @@ function startTradeNotifier() {
         tradeNotifyTick().catch(err => log(`[notifier] tick error: ${err.message}`));
     }, intervalMs);
     log(`Trade notifier started, every ${pc.watcher_interval_minutes}m`);
+}
+
+// ─── Daily report: end-of-day Telegram summary ─────────────────────────────
+// Aggregates the trading day (in MSK) into one message:
+//   • scan cycles run        (from the persisted daily counter)
+//   • entries found + placed (from the durable signal log)
+//   • orders cancelled       (executor journal, by cancel_time)
+//   • fills + closes         (executor journal, by fill_time / close_time)
+//   • realized P/L           (sum of profit on positions closed that day)
+//   • rationale per found entry (strategy phases, reconstructed from the log)
+// Everything is derived from durable stores, so the report is correct even
+// across scanner restarts and reflects only the requested MSK calendar day.
+
+const _DIR_LABELS = { up: 'LONG ↑', buy: 'LONG ↑', long: 'LONG ↑',
+                      down: 'SHORT ↓', sell: 'SHORT ↓', short: 'SHORT ↓' };
+function _reportDir(direction) {
+    return _DIR_LABELS[String(direction || '').toLowerCase()] || String(direction || '—');
+}
+
+// One concise strategy rationale line for a found-entry signal-log record.
+function _entryRationale(r) {
+    const parts = [];
+    const trend = String(r.trend || '').toLowerCase();
+    parts.push(`тренд H1 ${trend === 'up' ? 'восходящий' : trend === 'down' ? 'нисходящий' : trend === 'range' ? 'боковик' : (r.trend || '—')}`);
+    const sig = [r.s1 && 'С1', r.s2 && 'С2', r.s3 && 'С3'].filter(Boolean);
+    if (sig.length === 3) parts.push('слом M30 подтверждён (С1+С2+С3)');
+    else if (sig.length) parts.push(`слом M30 (${sig.join('+')})`);
+    if (r.reversal) parts.push(`разворот (${r.reversalReason || 'коррекция > импульса'})`);
+    const fp = (v) => (v == null || !isFinite(v)) ? '—' : String(Number(v));
+    parts.push(`вход ${fp(r.entry)}, стоп ${fp(r.stop)}, тейк ${fp(r.take)}`);
+    return parts.join('; ');
+}
+
+// Human label for what the scanner did with a found entry.
+function _dispositionLabel(r) {
+    switch (r.disposition) {
+        case 'placed':       return `→ ордер выставлен${r.ticket ? ` (тикет ${r.ticket})` : ''} ✅`;
+        case 'signal_only':  return '→ только сигнал (автоторговля выкл.)';
+        case 'below_min_rr': return `→ отсеян: ${r.reason || 'R:R ниже минимума'}`;
+        case 'skipped':      return `→ пропущен: ${r.reason || 'фильтр'}`;
+        case 'failed':       return `→ ошибка размещения: ${r.reason || 'неизвестно'}`;
+        case 'invalid':      return `→ невалидный сигнал: ${r.reason || '—'}`;
+        default:             return r.reason ? `→ ${r.reason}` : '';
+    }
+}
+
+// Gather all figures for one MSK calendar day (YYYY-MM-DD). Returns a plain
+// object; the executor-derived fields are null when the executor is unreachable.
+async function collectDailyReport(dateStr) {
+    // Signal log — found entries and placements attributed to this MSK day.
+    const foundValid = [];
+    const foundNearMiss = [];
+    let placed = 0;
+    for (const r of _signalLogLoad()) {
+        const t = Date.parse(r.time);
+        if (isNaN(t) || moscowDateStrOf(t) !== dateStr) continue;
+        if (r.valid) foundValid.push(r); else foundNearMiss.push(r);
+        if (r.disposition === 'placed') placed++;
+    }
+
+    // Executor journal — cancellations / fills / closes / P&L by their own event
+    // times, so a pending placed days ago that fills or cancels today lands here.
+    let journalOk = false;
+    let cancelled = 0, filled = 0, closed = 0, wins = 0, losses = 0, profit = 0;
+    if (CONFIG.executorUrl && CONFIG.executorSecret) {
+        try {
+            const data = await execFetch('GET', '/journal?days=30');
+            if (data && data.success && Array.isArray(data.rows)) {
+                journalOk = true;
+                for (const row of data.rows) {
+                    // Fill: any row that entered the market on this day (filled OR
+                    // later closed) — counted by the fill deal's own timestamp.
+                    if (row.fill_time && moscowDateStrOf(row.fill_time * 1000) === dateStr) filled++;
+                    // Close: realized on this day (drives the financial result).
+                    if (row.close_time && moscowDateStrOf(row.close_time * 1000) === dateStr) {
+                        closed++;
+                        const p = typeof row.profit === 'number' ? row.profit : 0;
+                        profit += p;
+                        if (p >= 0) wins++; else losses++;
+                    }
+                    // Cancel: by cancel_time when present, else placement timestamp.
+                    if (row.status === 'cancelled') {
+                        const ct = row.cancel_time ? Date.parse(row.cancel_time)
+                                 : (row.timestamp ? Date.parse(row.timestamp) : NaN);
+                        if (!isNaN(ct) && moscowDateStrOf(ct) === dateStr) cancelled++;
+                    }
+                }
+            }
+        } catch (err) {
+            log(`[daily-report] journal fetch error: ${err.message}`);
+        }
+    }
+
+    return {
+        date: dateStr,
+        scans: getDailyStat(dateStr, 'scans'),
+        foundValid, foundNearMiss, placed,
+        journalOk, cancelled, filled, closed, wins, losses,
+        profit: Math.round(profit * 100) / 100,
+    };
+}
+
+// Compose the Telegram message text for a collected report.
+function formatDailyReport(rep) {
+    const cur = (lastAccountInfo && lastAccountInfo.currency) ? ` ${lastAccountInfo.currency}` : '';
+    const na = (v) => rep.journalOk ? String(v) : '—';
+    const sign = rep.profit > 0 ? '+' : '';
+    const profitStr = rep.journalOk
+        ? `${sign}${rep.profit.toLocaleString('ru-RU', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}${cur}`
+        : '— (executor недоступен)';
+    const pnlIcon = !rep.journalOk ? '💰' : (rep.profit > 0 ? '🟢' : rep.profit < 0 ? '🔴' : '⚪');
+
+    const lines = [
+        `📅 *Итоги дня — ${formatRuDate(rep.date)}*`,
+        ``,
+        `🔍 Сканирований: *${rep.scans}*`,
+        `🎯 Найдено входов: *${rep.foundValid.length}*` +
+            (rep.foundNearMiss.length ? ` (+${rep.foundNearMiss.length} отсеяно фильтром)` : ''),
+        `📤 Ордеров выставлено: *${rep.placed}*`,
+        `🚫 Ордеров отменено: *${na(rep.cancelled)}*`,
+        `🟢 Сработало входов: *${na(rep.filled)}*`,
+        `🏁 Позиций закрыто: *${na(rep.closed)}*`,
+        ``,
+        `${pnlIcon} *Финансовый результат: ${profitStr}*`,
+    ];
+    if (rep.journalOk && rep.closed > 0) {
+        lines.push(`   Прибыльных: ${rep.wins} · Убыточных: ${rep.losses}`);
+    }
+
+    if (rep.foundValid.length) {
+        lines.push('', '📝 *Обоснование найденных входов:*');
+        for (const r of rep.foundValid) {
+            const rr = (r.rr != null && isFinite(r.rr)) ? ` · R:R 1:${Number(r.rr).toFixed(1)}` : '';
+            lines.push('', `• *${r.pair}* — ${_reportDir(r.direction)}${rr}`);
+            lines.push(`  ${_entryRationale(r)}`);
+            const disp = _dispositionLabel(r);
+            if (disp) lines.push(`  ${disp}`);
+        }
+    } else {
+        lines.push('', '📝 За день валидных точек входа по стратегии не найдено.');
+    }
+
+    return lines.join('\n');
+}
+
+// Build and send the daily report for a given MSK date (defaults to today).
+async function sendDailyReport(dateStr = getMoscowDateStr()) {
+    const rep = await collectDailyReport(dateStr);
+    const text = formatDailyReport(rep);
+    await sendTelegram(text);
+    return { rep, text };
+}
+
+// ─── Daily report scheduler ───
+// Polls every 5 min; fires once when the MSK hour reaches the configured target,
+// deduped via a per-day marker file so a restart in the same hour won't resend.
+const DAILY_REPORT_LAST_FILE = process.env.DAILY_REPORT_LAST_FILE || '/data/daily-report-last.txt';
+let _dailyReportTimer = null;
+let _dailyReportRunning = false;
+
+function _dailyReportLastSent() {
+    try {
+        if (fs.existsSync(DAILY_REPORT_LAST_FILE)) return fs.readFileSync(DAILY_REPORT_LAST_FILE, 'utf-8').trim();
+    } catch { /* ignore */ }
+    return '';
+}
+function _dailyReportMarkSent(day) {
+    try { fs.writeFileSync(DAILY_REPORT_LAST_FILE, day, 'utf-8'); }
+    catch (err) { log(`[daily-report] could not write marker: ${err.message}`); }
+}
+
+function startDailyReportScheduler() {
+    if (_dailyReportTimer) clearInterval(_dailyReportTimer);
+    const pc0 = pendingConfig.get(true);
+    log(`Daily report scheduler started (${pc0.daily_report_enabled ? `daily at ${pc0.daily_report_hour}:00 MSK` : 'disabled'})`);
+
+    // Enabled state and hour are read live from pending_config each tick, so
+    // toggling them in the settings UI takes effect without a restart.
+    const tick = async () => {
+        if (_dailyReportRunning) return;
+        try {
+            const pc = pendingConfig.get();
+            if (!pc.daily_report_enabled) return;
+            if (getMoscowHour() !== pc.daily_report_hour) return;
+            const today = getMoscowDateStr();
+            if (_dailyReportLastSent() === today) return;
+            _dailyReportRunning = true;
+            log(`[daily-report] sending report for ${today}`);
+            await sendDailyReport(today);
+            _dailyReportMarkSent(today);
+        } catch (err) {
+            log(`[daily-report] tick error: ${err.message}`);
+        } finally {
+            _dailyReportRunning = false;
+        }
+    };
+
+    _dailyReportTimer = setInterval(tick, 5 * 60 * 1000);
+    // Fire one check shortly after startup so a restart inside the window still sends.
+    setTimeout(() => tick().catch(() => {}), 10_000);
 }
 
 // ─── HTTP API for frontend ───
@@ -2364,6 +2645,21 @@ const apiServer = http.createServer(async (req, res) => {
             return reply(res, 200, { success: true, total: rows.length, stats, signals: out });
         }
 
+        // ─── Daily report (end-of-day Telegram summary) ───
+        // GET previews the composed report; POST sends it to Telegram now.
+        if (p === '/api/daily-report' && req.method === 'GET') {
+            if (!requireAdmin(req)) return reply(res, 401, { success: false, error: 'admin secret required' });
+            const date = parsed.query.date || getMoscowDateStr();
+            const rep = await collectDailyReport(date);
+            return reply(res, 200, { success: true, report: rep, text: formatDailyReport(rep) });
+        }
+        if (p === '/api/daily-report/send' && req.method === 'POST') {
+            if (!requireAdmin(req)) return reply(res, 401, { success: false, error: 'admin secret required' });
+            const date = parsed.query.date || getMoscowDateStr();
+            const { rep, text } = await sendDailyReport(date);
+            return reply(res, 200, { success: true, report: rep, text });
+        }
+
         // ─── Candle history (SQLite) ───
         if (p === '/api/candles' && req.method === 'GET') {
             if (!requireAdmin(req)) return reply(res, 401, { success: false, error: 'admin secret required' });
@@ -2673,6 +2969,22 @@ if (process.argv.includes('--test-telegram')) {
         log('Test message sent');
     })().catch(err => {
         log(`Test error: ${err.message}`);
+        process.exit(1);
+    });
+} else if (process.argv.includes('--test-daily-report')) {
+    (async () => {
+        // Optional date arg: --date=YYYY-MM-DD (defaults to today MSK).
+        const dateArg = (process.argv.find(a => a.startsWith('--date=')) || '').split('=')[1];
+        const date = dateArg || getMoscowDateStr();
+        const doSend = process.argv.includes('--send');
+        log(`Building daily report for ${date}${doSend ? ' (will send)' : ' (dry run)'}...`);
+        const rep = await collectDailyReport(date);
+        const text = formatDailyReport(rep);
+        console.log('\n──────── DAILY REPORT ────────\n' + text + '\n──────────────────────────────\n');
+        if (doSend) { await sendTelegram(text); log('Report sent to Telegram'); }
+        process.exit(0);
+    })().catch(err => {
+        log(`Daily report test error: ${err.message}`);
         process.exit(1);
     });
 } else if (process.argv.includes('--test-agent-digest')) {

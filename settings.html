@@ -646,6 +646,43 @@
 
             <div class="source-card">
                 <div class="source-header">
+                    <span class="source-name">Ежедневный отчёт (итоги дня)</span>
+                    <span id="pcDailyReportBadge"><span class="source-badge badge-empty">—</span></span>
+                </div>
+                <div class="source-info">
+                    Раз в день бот присылает сводку торгового дня: сколько было сканирований,
+                    найдено входов, выставлено и отменено ордеров, сколько входов сработало и
+                    позиций закрыто, обоснование найденных точек входа и финансовый результат.<br>
+                    Требуется admin-секрет (задаётся в разделе «Отложенные ордера»).
+                </div>
+
+                <div class="field-row">
+                    <div>
+                        <div class="field-label">Присылать ежедневный отчёт</div>
+                        <div class="field-help">Итоги дня в Telegram в заданный час</div>
+                    </div>
+                    <input type="checkbox" id="pc_daily_report_enabled" class="field-toggle">
+                </div>
+
+                <div class="field-row">
+                    <div>
+                        <div class="field-label">Час отправки (МСК, 0–23)</div>
+                        <div class="field-help">Например 22 — сразу после окна сканирования</div>
+                    </div>
+                    <input type="number" class="field-input" id="pc_daily_report_hour" min="0" max="23" step="1">
+                </div>
+
+                <div class="btn-row">
+                    <button class="btn btn-primary" onclick="pcSaveDailyReport()">Сохранить</button>
+                    <button class="btn btn-test" onclick="pcSendDailyReport()" id="pcDailyReportSendBtn">Отправить сейчас</button>
+                    <button class="btn btn-test" onclick="pcPreviewDailyReport()" id="pcDailyReportPreviewBtn">Предпросмотр</button>
+                </div>
+                <div class="test-result" id="pcDailyReportResult"></div>
+                <pre id="pcDailyReportPreview" style="display:none;white-space:pre-wrap;word-break:break-word;background:var(--bg-elev,#1b1b1f);border:1px solid var(--border,#333);border-radius:8px;padding:12px;margin-top:10px;font-size:13px;line-height:1.5"></pre>
+            </div>
+
+            <div class="source-card">
+                <div class="source-header">
                     <span class="source-name">История уведомлений</span>
                     <span id="tgHistBadge"><span class="source-badge badge-empty">—</span></span>
                 </div>
@@ -1037,12 +1074,15 @@
             'max_distance_pct_from_entry', 'cancel_on_stop_breach', 'watcher_max_age_hours',
             'watcher_interval_minutes', 'min_rr', 'min_winrate_threshold',
             'min_samples_for_winrate', 'winrate_lookback_days', 'max_pending_total',
+            'daily_report_enabled', 'daily_report_hour',
         ];
-        const PC_BOOL = new Set(['use_pending', 'replace_existing_pending', 'cancel_on_stop_breach']);
+        const PC_BOOL = new Set(['use_pending', 'replace_existing_pending', 'cancel_on_stop_breach',
+            'daily_report_enabled']);
         const PC_NUM = new Set([
             'ttl_hours', 'max_distance_pct_from_entry', 'watcher_max_age_hours',
             'watcher_interval_minutes', 'min_rr', 'min_winrate_threshold',
             'min_samples_for_winrate', 'winrate_lookback_days', 'max_pending_total',
+            'daily_report_hour',
         ]);
 
         function pcAdminSecret() {
@@ -1094,6 +1134,13 @@
             document.getElementById('pcStateBadge').innerHTML = cfg.use_pending
                 ? '<span class="source-badge badge-active">PENDING ON</span>'
                 : '<span class="source-badge badge-configured">MARKET (OFF)</span>';
+
+            const drBadge = document.getElementById('pcDailyReportBadge');
+            if (drBadge) {
+                drBadge.innerHTML = cfg.daily_report_enabled
+                    ? `<span class="source-badge badge-active">ВКЛ · ${cfg.daily_report_hour}:00 МСК</span>`
+                    : '<span class="source-badge badge-empty">Выключен</span>';
+            }
         }
 
         function pcCollectForm() {
@@ -1166,6 +1213,70 @@
             }
             pcFillForm(r.config);
             pcShow(document.getElementById('pcSaveResult'), 'Сохранено и применено', 'ok');
+        };
+
+        // ─── Daily report (end-of-day Telegram summary) ───
+        window.pcSaveDailyReport = async function () {
+            const out = document.getElementById('pcDailyReportResult');
+            const enabled = document.getElementById('pc_daily_report_enabled').checked;
+            const hour = parseInt(document.getElementById('pc_daily_report_hour').value, 10);
+            if (Number.isNaN(hour) || hour < 0 || hour > 23) {
+                pcShow(out, 'Час должен быть числом 0–23', 'fail');
+                return;
+            }
+            pcShow(out, 'Сохранение...', 'loading');
+            // Send only the two daily-report fields so other settings stay untouched.
+            const r = await pcFetch('/api/pending-config', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ daily_report_enabled: enabled, daily_report_hour: hour }),
+            });
+            if (!r.success) {
+                pcShow(out, 'Ошибка: ' + (r.error || r.errors?.join('; ') || 'fail'), 'fail');
+                return;
+            }
+            pcFillForm(r.config);
+            pcShow(out, enabled
+                ? `Сохранено: отчёт в ${hour}:00 МСК`
+                : 'Сохранено: отчёт выключен', 'ok');
+        };
+
+        window.pcSendDailyReport = async function () {
+            const out = document.getElementById('pcDailyReportResult');
+            const btn = document.getElementById('pcDailyReportSendBtn');
+            btn.disabled = true;
+            pcShow(out, 'Отправка в Telegram...', 'loading');
+            try {
+                const r = await pcFetch('/api/daily-report/send', { method: 'POST' });
+                if (!r.success) { pcShow(out, 'Ошибка: ' + (r.error || 'fail'), 'fail'); return; }
+                pcShow(out, 'Отчёт отправлен в Telegram', 'ok');
+                const pre = document.getElementById('pcDailyReportPreview');
+                pre.textContent = r.text || '';
+                pre.style.display = r.text ? 'block' : 'none';
+            } catch (err) {
+                pcShow(out, 'Сеть: ' + err.message, 'fail');
+            } finally {
+                btn.disabled = false;
+            }
+        };
+
+        window.pcPreviewDailyReport = async function () {
+            const out = document.getElementById('pcDailyReportResult');
+            const btn = document.getElementById('pcDailyReportPreviewBtn');
+            btn.disabled = true;
+            pcShow(out, 'Формирование...', 'loading');
+            try {
+                const r = await pcFetch('/api/daily-report');
+                if (!r.success) { pcShow(out, 'Ошибка: ' + (r.error || 'fail'), 'fail'); return; }
+                const pre = document.getElementById('pcDailyReportPreview');
+                pre.textContent = r.text || '(пусто)';
+                pre.style.display = 'block';
+                pcShow(out, 'Предпросмотр (не отправлено)', 'ok');
+            } catch (err) {
+                pcShow(out, 'Сеть: ' + err.message, 'fail');
+            } finally {
+                btn.disabled = false;
+            }
         };
 
         function pcRenderStats(data) {
