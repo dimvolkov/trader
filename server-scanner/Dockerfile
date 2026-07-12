@@ -7,5 +7,5 @@ RUN npm install --production
 FROM node:20-alpine
 WORKDIR /app
 COPY --from=builder /app/node_modules ./node_modules
-COPY scanner.js pending_config.js auth.js ai-agent.js candle_store.js trading_algorithm.md package.json ./
+COPY scanner.js pending_config.js auth.js ai-agent.js candle_store.js langfuse.js trading_algorithm.md package.json ./
 CMD ["node", "scanner.js"]

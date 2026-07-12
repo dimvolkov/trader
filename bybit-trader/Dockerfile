@@ -13,7 +13,8 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY app.py bybit_bridge.py crypto_config.py signal_parser.py \
-     signal_store.py telegram_listener.py bootstrap_session.py ./
+     signal_store.py telegram_listener.py bootstrap_session.py \
+     langfuse_tracer.py ./
 
 RUN mkdir -p /data
 VOLUME ["/data"]

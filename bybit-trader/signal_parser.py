@@ -26,6 +26,8 @@ import os
 import re
 from typing import Any, Dict, List, Optional, Tuple
 
+import langfuse_tracer
+
 # Counter is module-level so /signals can surface "% routed to LLM" in the UI.
 STATS = {"regex_hits": 0, "llm_hits": 0, "llm_failures": 0, "skipped": 0}
 
@@ -187,21 +189,43 @@ def _llm_parse(text: str) -> Optional[Dict[str, Any]]:
     if client is None:
         return None
     model = os.getenv("CLAUDE_MODEL", "claude-sonnet-4-6")
+    prompt = text[:4000]
+    start_time = langfuse_tracer.now_iso()
     try:
         msg = client.messages.create(
             model=model,
             max_tokens=400,
             system=_LLM_SYSTEM,
-            messages=[{"role": "user", "content": text[:4000]}],
+            messages=[{"role": "user", "content": prompt}],
         )
         raw = "".join(
             block.text for block in msg.content
             if getattr(block, "type", None) == "text"
         ).strip()
-        if raw.startswith("```"):
-            raw = re.sub(r"^```(?:json)?", "", raw).rstrip("`").strip()
-        data = json.loads(raw)
     except Exception as exc:                     # pragma: no cover - network
+        STATS["llm_failures"] += 1
+        print(f"[signal-parser] LLM error: {exc}")
+        langfuse_tracer.trace_generation(
+            name="signal-parse", model=model,
+            model_parameters={"max_tokens": 400}, input=prompt,
+            level="ERROR", status_message=str(exc),
+            start_time=start_time, tags=["bybit-trader", "signal-parser"],
+        )
+        return None
+
+    langfuse_tracer.trace_generation(
+        name="signal-parse", model=model,
+        model_parameters={"max_tokens": 400}, input=prompt, output=raw,
+        usage=langfuse_tracer.usage_from_anthropic(getattr(msg, "usage", None)),
+        start_time=start_time, tags=["bybit-trader", "signal-parser"],
+    )
+
+    cleaned = raw
+    if cleaned.startswith("```"):
+        cleaned = re.sub(r"^```(?:json)?", "", cleaned).rstrip("`").strip()
+    try:
+        data = json.loads(cleaned)
+    except Exception as exc:                     # pragma: no cover - malformed LLM output
         STATS["llm_failures"] += 1
         print(f"[signal-parser] LLM error: {exc}")
         return None

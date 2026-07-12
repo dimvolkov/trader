@@ -53,6 +53,12 @@ services:
       - AI_AGENT_ENABLED=${AI_AGENT_ENABLED:-false}
       - AI_AGENT_CRON_MSK_HOUR=${AI_AGENT_CRON_MSK_HOUR:-3}
       - AI_AGENT_DATA_ROOT=/data/ai-logs
+      # Langfuse-трассировка LLM-вызовов (пусто → трейсинг выключен)
+      - LANGFUSE_HOST=${LANGFUSE_HOST:-}
+      - LANGFUSE_PUBLIC_KEY=${LANGFUSE_PUBLIC_KEY:-}
+      - LANGFUSE_SECRET_KEY=${LANGFUSE_SECRET_KEY:-}
+      - LANGFUSE_TRACING_ENVIRONMENT=${LANGFUSE_TRACING_ENVIRONMENT:-production}
+      - LANGFUSE_RELEASE=${LANGFUSE_RELEASE:-}
       # JSON-файл live-конфига отложенных ордеров
       - PENDING_CONFIG_FILE=/data/pending_config.json
       # Auth (login/register/reset)
@@ -100,6 +106,12 @@ services:
       # LLM fallback parser (uses the same Anthropic key as the strategy chat)
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
       - CLAUDE_MODEL=${CLAUDE_MODEL:-claude-sonnet-4-6}
+      # Langfuse-трассировка LLM-вызовов (пусто → трейсинг выключен)
+      - LANGFUSE_HOST=${LANGFUSE_HOST:-}
+      - LANGFUSE_PUBLIC_KEY=${LANGFUSE_PUBLIC_KEY:-}
+      - LANGFUSE_SECRET_KEY=${LANGFUSE_SECRET_KEY:-}
+      - LANGFUSE_TRACING_ENVIRONMENT=${LANGFUSE_TRACING_ENVIRONMENT:-production}
+      - LANGFUSE_RELEASE=${LANGFUSE_RELEASE:-}
       # State files
       - CRYPTO_CONFIG_FILE=/data/crypto_config.json
       - SIGNAL_LOG=/data/signals.jsonl

@@ -7,6 +7,7 @@ const path = require('path');
 const crypto = require('crypto');
 
 const pendingConfig = require('./pending_config');
+const langfuse = require('./langfuse');
 
 const DATA_ROOT = process.env.AI_AGENT_DATA_ROOT || '/data/ai-logs';
 const REC_DIR = path.join(DATA_ROOT, 'recommendations');
@@ -384,16 +385,41 @@ async function runAnalysis(deps, { silent = false } = {}) {
 
     const systemText = _buildSystemPrompt(strategyDoc);
 
+    // Langfuse trace (no-op unless LANGFUSE_* env is set).
+    const lfTrace = langfuse.enabled() ? langfuse.trace({
+        name: 'ai-agent.daily-analysis',
+        input: {
+            overall: collected.stats.overall,
+            pairs_analyzed: Object.keys(collected.analyses),
+            period_days: 60,
+        },
+        metadata: { source: 'scheduler-or-manual', model: CONFIG.anthropicModel },
+        tags: ['scanner', 'ai-agent'],
+    }) : null;
+    const lfGen = lfTrace ? lfTrace.generation({
+        name: 'strategy-optimizer',
+        model: CONFIG.anthropicModel,
+        modelParameters: { max_tokens: 2048, temperature: 0.2 },
+        input: [
+            { role: 'system', content: systemText },
+            { role: 'user', content: userText },
+        ],
+    }) : null;
+
     const claude = await _callClaude({ CONFIG, fetchWithTimeout }, systemText, userText);
     if (!claude.ok) {
         _log(`Claude error: ${claude.error}`);
+        if (lfGen) lfGen.end({ level: 'ERROR', statusMessage: claude.error });
+        if (lfTrace) { lfTrace.update({ level: 'ERROR', statusMessage: claude.error }); await lfTrace.flush(); }
         return { ok: false, error: claude.error };
     }
     _log(`Claude usage: in=${claude.usage.input_tokens} out=${claude.usage.output_tokens} cache_read=${claude.usage.cache_read_input_tokens || 0} cache_create=${claude.usage.cache_creation_input_tokens || 0}`);
+    if (lfGen) lfGen.end({ output: claude.text, usage: langfuse.usageFromAnthropic(claude.usage) });
 
     const parsed = _parseAndValidateProposals(claude.text, currentConfig);
     if (!parsed.ok) {
         _log(`parse failed: ${parsed.error}`);
+        if (lfTrace) { lfTrace.update({ level: 'WARNING', statusMessage: `parse failed: ${parsed.error}` }); await lfTrace.flush(); }
         return { ok: false, error: parsed.error, raw: parsed.raw };
     }
 
@@ -424,6 +450,18 @@ async function runAnalysis(deps, { silent = false } = {}) {
         } catch (err) {
             _log(`telegram send error: ${err.message}`);
         }
+    }
+    if (lfTrace) {
+        lfTrace.update({
+            output: {
+                report_id: report.id,
+                summary: parsed.summary,
+                proposals: parsed.proposals.length,
+                rejected: parsed.rejected.length,
+                overall_health: (parsed.diagnostics || {}).overall_health,
+            },
+        });
+        await lfTrace.flush();
     }
     _log(`done: ${parsed.proposals.length} proposals (${parsed.rejected.length} rejected) saved to ${filename}`);
     return { ok: true, report_id: report.id, proposals: parsed.proposals.length };

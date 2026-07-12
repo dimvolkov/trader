@@ -5,6 +5,7 @@ const pendingConfig = require('./pending_config');
 const auth = require('./auth');
 const aiAgent = require('./ai-agent');
 const candleStore = require('./candle_store');
+const langfuse = require('./langfuse');
 auth.init();
 
 // ─── Configuration from environment variables ───
@@ -2184,6 +2185,24 @@ async function handleChat(req, res) {
         messages: messages.map(m => ({ role: m.role, content: m.content })),
     };
 
+    // Langfuse trace (no-op unless LANGFUSE_* env is set).
+    const lfSession = auth.getSessionFromRequest(req);
+    const lfEmail = (lfSession && lfSession.email) || null;
+    const lfTrace = langfuse.enabled() ? langfuse.trace({
+        name: 'strategy-chat',
+        input: messages,
+        metadata: { messages: messages.length, model: CONFIG.anthropicModel },
+        tags: ['scanner', 'chat'],
+        userId: lfEmail,
+        sessionId: lfEmail,
+    }) : null;
+    const lfGen = lfTrace ? lfTrace.generation({
+        name: 'strategy-chat',
+        model: CONFIG.anthropicModel,
+        modelParameters: { max_tokens: 1024, temperature: 0.3 },
+        input: messages,
+    }) : null;
+
     try {
         const r = await fetchWithTimeout('https://api.anthropic.com/v1/messages', {
             method: 'POST',
@@ -2201,6 +2220,8 @@ async function handleChat(req, res) {
             const msg = r.status === 401 ? 'invalid Anthropic API key'
                       : r.status === 429 ? 'Anthropic rate limit hit, try later'
                       : `LLM error (HTTP ${r.status})`;
+            if (lfGen) lfGen.end({ level: 'ERROR', statusMessage: `HTTP ${r.status}: ${msg}` });
+            if (lfTrace) { lfTrace.update({ level: 'ERROR', statusMessage: msg }); lfTrace.flush(); }
             return reply(res, 502, { success: false, error: msg });
         }
 
@@ -2212,6 +2233,8 @@ async function handleChat(req, res) {
             .trim();
         const usage = data.usage || {};
         log(`[chat] reply ${data.stop_reason} in=${usage.input_tokens} out=${usage.output_tokens} cache_read=${usage.cache_read_input_tokens || 0} cache_create=${usage.cache_creation_input_tokens || 0}`);
+        if (lfGen) lfGen.end({ output: reply_text, usage: langfuse.usageFromAnthropic(usage) });
+        if (lfTrace) { lfTrace.update({ output: reply_text }); lfTrace.flush(); }
         return reply(res, 200, {
             success: true,
             reply: reply_text,
@@ -2220,6 +2243,8 @@ async function handleChat(req, res) {
         });
     } catch (err) {
         console.error(`[chat] fetch error: ${err.message}`);
+        if (lfGen) lfGen.end({ level: 'ERROR', statusMessage: err.message });
+        if (lfTrace) { lfTrace.update({ level: 'ERROR', statusMessage: err.message }); lfTrace.flush(); }
         return reply(res, 502, { success: false, error: 'failed to reach LLM' });
     }
 }
