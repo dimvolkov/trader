@@ -2484,6 +2484,13 @@ const apiServer = http.createServer(async (req, res) => {
             return reply(res, 200, await runHealthCheck());
         }
 
+        if (p === '/api/langfuse-status' && req.method === 'GET') {
+            if (!requireAdmin(req)) return reply(res, 401, { success: false, error: 'admin secret required' });
+            const out = { success: true, status: langfuse.status() };
+            if (parsed.query.test === '1') out.test = await langfuse.testTrace();
+            return reply(res, 200, out);
+        }
+
         if (p === '/api/send-balance-telegram') {
             if (!CONFIG.telegramBotToken || !CONFIG.telegramChatId) {
                 return reply(res, 503, { success: false, error: 'Telegram not configured' });

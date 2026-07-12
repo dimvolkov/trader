@@ -22,6 +22,63 @@ function enabled() {
     return !!(HOST && PUBLIC_KEY && SECRET_KEY);
 }
 
+// Diagnostic snapshot of the tracer's configuration. Secrets are masked so this
+// is safe to expose through an (admin-gated) status endpoint. `enabled` tells you
+// whether traces are sent at all; the per-var booleans reveal WHICH env is missing.
+function status() {
+    return {
+        enabled: enabled(),
+        host: HOST || null,
+        hasPublicKey: !!PUBLIC_KEY,
+        publicKeyPreview: PUBLIC_KEY ? `${PUBLIC_KEY.slice(0, 6)}…` : null,
+        hasSecretKey: !!SECRET_KEY,
+        environment: ENVIRONMENT,
+        release: RELEASE || null,
+    };
+}
+
+// Send a minimal standalone trace and REPORT the ingestion outcome (unlike the
+// fire-and-forget `_send`). Lets an operator distinguish "disabled" from
+// "configured but ingestion is failing" (bad host / wrong keys / unreachable).
+async function testTrace(timeoutMs = 5000) {
+    if (!enabled()) {
+        return { ok: false, skipped: true, reason: 'tracing disabled — LANGFUSE_HOST/PUBLIC_KEY/SECRET_KEY not all set' };
+    }
+    const traceId = _uuid();
+    const ts = _now();
+    const batch = [{
+        id: _uuid(),
+        type: 'trace-create',
+        timestamp: ts,
+        body: {
+            id: traceId,
+            timestamp: ts,
+            name: 'langfuse-selftest',
+            input: { ping: 'scanner /api/langfuse-status?test=1' },
+            tags: ['selftest'],
+            environment: ENVIRONMENT,
+            release: RELEASE || undefined,
+        },
+    }];
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+        const auth = Buffer.from(`${PUBLIC_KEY}:${SECRET_KEY}`).toString('base64');
+        const res = await fetch(`${HOST}/api/public/ingestion`, {
+            method: 'POST',
+            headers: { 'content-type': 'application/json', authorization: `Basic ${auth}` },
+            body: JSON.stringify({ batch }),
+            signal: controller.signal,
+        });
+        const body = await res.text().catch(() => '');
+        return { ok: res.ok, status: res.status, traceId, body: body.slice(0, 500) };
+    } catch (err) {
+        return { ok: false, error: err.message };
+    } finally {
+        clearTimeout(timer);
+    }
+}
+
 function _uuid() { return crypto.randomUUID(); }
 function _now() { return new Date().toISOString(); }
 
@@ -155,4 +212,4 @@ function trace({ name, input = null, metadata = null, tags = null, userId = null
     };
 }
 
-module.exports = { enabled, trace, usageFromAnthropic };
+module.exports = { enabled, trace, usageFromAnthropic, status, testTrace };
