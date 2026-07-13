@@ -1,5 +1,6 @@
 FROM nginx:alpine
 COPY nginx.conf /etc/nginx/conf.d/default.conf
+COPY landing.html /usr/share/nginx/html/landing.html
 COPY index.html /usr/share/nginx/html/index.html
 COPY scanner.html /usr/share/nginx/html/scanner.html
 COPY settings.html /usr/share/nginx/html/settings.html

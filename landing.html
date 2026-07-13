@@ -1,0 +1,502 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Trader — алгоритмическая торговля по стратегии «Слом»</title>
+<meta name="description" content="Trader — автоматический сканер входов по стратегии «Слом» на форекс и крипто: сигналы, отложенные ордера, авто-исполнение в MT5 и на ByBit, уведомления в Telegram и LLM-аналитика.">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Crect width='24' height='24' rx='7' fill='%232962ff'/%3E%3Cpath d='M3 17l6-6 4 4 8-8' fill='none' stroke='%23fff' stroke-width='2.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
+<style>
+  * { box-sizing: border-box; }
+  :root {
+    --bg: #131722;
+    --panel: #1e222d;
+    --panel-2: #262b38;
+    --ctrl: #2a2e39;
+    --border: #2a2e39;
+    --border-2: #363a45;
+    --text: #d1d4dc;
+    --muted: #787b86;
+    --white: #ffffff;
+    --blue: #2962ff;
+    --blue-hover: #1e54e6;
+    --green: #26a69a;
+    --red: #ef5350;
+    --orange: #ff9800;
+  }
+  html, body { margin: 0; padding: 0; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    line-height: 1.55;
+    -webkit-font-smoothing: antialiased;
+    overflow-x: hidden;
+  }
+  a { color: inherit; text-decoration: none; }
+  .container { width: 100%; max-width: 1100px; margin: 0 auto; padding: 0 24px; }
+
+  /* ── header ───────────────────────────────────────────── */
+  header.site {
+    position: sticky; top: 0; z-index: 50;
+    background: rgba(19,23,34,0.85);
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+    border-bottom: 1px solid var(--border);
+  }
+  .nav {
+    display: flex; align-items: center; justify-content: space-between;
+    height: 62px; gap: 16px;
+  }
+  .brand { display: flex; align-items: center; gap: 10px; font-weight: 700; font-size: 17px; color: var(--white); }
+  .brand-mark {
+    width: 32px; height: 32px; border-radius: 9px;
+    background: linear-gradient(135deg, #2962ff, #1e54e6);
+    display: flex; align-items: center; justify-content: center;
+    box-shadow: 0 6px 18px rgba(41,98,255,0.35);
+    flex-shrink: 0;
+  }
+  .nav-links { display: flex; align-items: center; gap: 26px; font-size: 14px; color: var(--muted); }
+  .nav-links a { transition: color .2s; }
+  .nav-links a:hover { color: var(--white); }
+  .nav-actions { display: flex; align-items: center; gap: 10px; }
+
+  /* ── buttons ──────────────────────────────────────────── */
+  .btn {
+    display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+    padding: 10px 18px; border-radius: 8px; font-size: 14px; font-weight: 600;
+    border: 1px solid transparent; cursor: pointer; transition: background .2s, border-color .2s, color .2s;
+    white-space: nowrap;
+  }
+  .btn-primary { background: var(--blue); color: var(--white); }
+  .btn-primary:hover { background: var(--blue-hover); }
+  .btn-ghost { background: var(--ctrl); color: var(--text); border-color: var(--border-2); }
+  .btn-ghost:hover { background: var(--panel-2); color: var(--white); }
+  .btn-lg { padding: 13px 26px; font-size: 15px; }
+
+  /* ── hero ─────────────────────────────────────────────── */
+  .hero { position: relative; padding: 84px 0 72px; overflow: hidden; }
+  .hero::before {
+    content: ''; position: absolute; inset: 0; z-index: 0; pointer-events: none;
+    background:
+      radial-gradient(620px 320px at 15% -10%, rgba(41,98,255,0.18), transparent 60%),
+      radial-gradient(560px 320px at 92% 8%, rgba(38,166,154,0.12), transparent 60%);
+  }
+  .hero .container { position: relative; z-index: 1; display: grid; grid-template-columns: 1.05fr 0.95fr; gap: 48px; align-items: center; }
+  .eyebrow {
+    display: inline-flex; align-items: center; gap: 8px;
+    font-size: 12.5px; font-weight: 600; letter-spacing: .02em;
+    color: var(--green); background: rgba(38,166,154,0.12);
+    border: 1px solid rgba(38,166,154,0.25); border-radius: 999px; padding: 5px 12px;
+    margin-bottom: 20px;
+  }
+  .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--green); box-shadow: 0 0 8px var(--green); }
+  h1.hero-title {
+    margin: 0 0 18px; color: var(--white);
+    font-size: clamp(34px, 5vw, 56px); font-weight: 700; line-height: 1.05; letter-spacing: -0.02em;
+  }
+  h1.hero-title .accent { color: var(--blue); }
+  .hero-sub { margin: 0 0 30px; font-size: 17px; color: var(--muted); max-width: 540px; }
+  .hero-cta { display: flex; flex-wrap: wrap; gap: 12px; margin-bottom: 26px; }
+  .hero-meta { display: flex; flex-wrap: wrap; gap: 20px 28px; font-size: 13px; color: var(--muted); }
+  .hero-meta b { color: var(--white); font-weight: 600; }
+
+  /* hero chart card */
+  .hero-card {
+    background: var(--panel); border: 1px solid var(--border); border-radius: 14px;
+    box-shadow: 0 12px 40px rgba(0,0,0,0.4); padding: 18px 18px 12px; }
+  .hc-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 4px; }
+  .hc-pair { font-size: 15px; font-weight: 700; color: var(--white); }
+  .hc-tag { font-size: 11px; font-weight: 600; padding: 3px 9px; border-radius: 6px; background: rgba(38,166,154,0.15); color: var(--green); }
+  .hc-price { font-size: 26px; font-weight: 700; color: var(--white); letter-spacing: -0.02em; }
+  .hc-price small { font-size: 13px; color: var(--green); font-weight: 600; margin-left: 8px; }
+  .hc-chart { width: 100%; height: 150px; margin: 8px 0 4px; display: block; }
+  .hc-levels { display: flex; gap: 8px; margin-top: 6px; }
+  .lvl { flex: 1; text-align: center; padding: 7px 4px; border-radius: 8px; background: var(--ctrl); border: 1px solid var(--border-2); }
+  .lvl .k { font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+  .lvl .v { font-size: 13px; font-weight: 700; margin-top: 2px; }
+  .lvl.entry .v { color: var(--blue); }
+  .lvl.stop .v { color: var(--red); }
+  .lvl.take .v { color: var(--green); }
+
+  /* ── sections ─────────────────────────────────────────── */
+  section { padding: 72px 0; border-top: 1px solid var(--border); }
+  .sec-head { text-align: center; max-width: 640px; margin: 0 auto 48px; }
+  .sec-kicker { font-size: 12.5px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: var(--blue); }
+  .sec-head h2 { margin: 10px 0 12px; font-size: clamp(26px, 3.4vw, 36px); font-weight: 700; color: var(--white); letter-spacing: -0.02em; }
+  .sec-head p { margin: 0; font-size: 16px; color: var(--muted); }
+
+  /* features grid */
+  .features { display: grid; grid-template-columns: repeat(4, 1fr); gap: 18px; }
+  .card {
+    grid-column: span 2;
+    background: var(--panel); border: 1px solid var(--border); border-radius: 12px;
+    padding: 22px 22px 24px; box-shadow: 0 6px 24px rgba(0,0,0,0.35);
+    transition: transform .25s, border-color .25s;
+  }
+  .card:hover { transform: translateY(-3px); border-color: var(--border-2); }
+  .card .ico {
+    width: 42px; height: 42px; border-radius: 11px; display: flex; align-items: center; justify-content: center;
+    margin-bottom: 14px; background: rgba(41,98,255,0.12); border: 1px solid rgba(41,98,255,0.25);
+  }
+  .card.g .ico { background: rgba(38,166,154,0.12); border-color: rgba(38,166,154,0.25); }
+  .card.o .ico { background: rgba(255,152,0,0.12); border-color: rgba(255,152,0,0.25); }
+  .card h3 { margin: 0 0 8px; font-size: 17px; font-weight: 700; color: var(--white); }
+  .card p { margin: 0; font-size: 14.5px; color: var(--muted); }
+  .card .tags { margin-top: 14px; display: flex; flex-wrap: wrap; gap: 6px; }
+  .chip { font-size: 11px; font-weight: 600; color: var(--text); background: var(--ctrl); border: 1px solid var(--border-2); border-radius: 6px; padding: 3px 8px; }
+
+  /* how it works */
+  .steps { display: grid; grid-template-columns: repeat(4, 1fr); gap: 18px; }
+  .step { position: relative; background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 24px 20px; }
+  .step .num {
+    width: 34px; height: 34px; border-radius: 9px; display: flex; align-items: center; justify-content: center;
+    font-weight: 700; font-size: 15px; color: var(--white);
+    background: linear-gradient(135deg, #2962ff, #1e54e6); box-shadow: 0 6px 16px rgba(41,98,255,0.3);
+    margin-bottom: 14px;
+  }
+  .step h4 { margin: 0 0 6px; font-size: 15.5px; font-weight: 700; color: var(--white); }
+  .step p { margin: 0; font-size: 13.5px; color: var(--muted); }
+  .step .arrow { position: absolute; top: 34px; right: -13px; color: var(--border-2); z-index: 2; }
+  .step:last-child .arrow { display: none; }
+
+  /* tech */
+  .tech-badges { display: flex; flex-wrap: wrap; justify-content: center; gap: 12px; max-width: 820px; margin: 0 auto; }
+  .badge {
+    display: inline-flex; align-items: center; gap: 9px; font-size: 14px; font-weight: 600; color: var(--text);
+    background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 11px 16px;
+  }
+  .badge .bd { width: 8px; height: 8px; border-radius: 50%; }
+
+  /* cta band */
+  .cta-band { text-align: center; }
+  .cta-inner {
+    background: var(--panel); border: 1px solid var(--border-2); border-radius: 16px;
+    padding: 48px 32px; box-shadow: 0 12px 40px rgba(0,0,0,0.4);
+    background-image: radial-gradient(600px 200px at 50% 0%, rgba(41,98,255,0.14), transparent 70%);
+  }
+  .cta-inner h2 { margin: 0 0 12px; font-size: clamp(24px, 3.2vw, 34px); font-weight: 700; color: var(--white); letter-spacing: -0.02em; }
+  .cta-inner p { margin: 0 auto 26px; font-size: 16px; color: var(--muted); max-width: 500px; }
+  .cta-inner .hero-cta { justify-content: center; margin-bottom: 0; }
+
+  /* footer */
+  footer.site { border-top: 1px solid var(--border); padding: 34px 0 40px; }
+  .foot { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 16px; }
+  .foot .brand { font-size: 15px; }
+  .foot-links { display: flex; gap: 22px; font-size: 14px; color: var(--muted); }
+  .foot-links a:hover { color: var(--white); }
+  .disclaimer { margin-top: 20px; font-size: 12px; color: var(--muted); max-width: 720px; line-height: 1.6; }
+
+  /* reveal animation */
+  .reveal { opacity: 0; transform: translateY(22px); transition: opacity .7s ease, transform .7s cubic-bezier(.2,.8,.2,1); }
+  .reveal.in { opacity: 1; transform: translateY(0); }
+  @media (prefers-reduced-motion: reduce) { .reveal { opacity: 1; transform: none; transition: none; } }
+
+  /* responsive */
+  @media (max-width: 900px) {
+    .hero { padding: 56px 0 52px; }
+    .hero .container { grid-template-columns: 1fr; gap: 36px; }
+    .hero-card { order: 2; }
+    .features { grid-template-columns: repeat(2, 1fr); }
+    .card { grid-column: span 1; }
+    .steps { grid-template-columns: repeat(2, 1fr); }
+    .step .arrow { display: none; }
+    .nav-links { display: none; }
+  }
+  @media (max-width: 560px) {
+    .container { padding: 0 18px; }
+    .features { grid-template-columns: 1fr; }
+    .steps { grid-template-columns: 1fr; }
+    .hero-meta { gap: 14px 22px; }
+    section { padding: 54px 0; }
+    .foot { flex-direction: column; align-items: flex-start; }
+  }
+</style>
+</head>
+<body>
+
+<header class="site">
+  <div class="container nav">
+    <a class="brand" href="/landing.html" aria-label="Trader">
+      <span class="brand-mark">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none"><path d="M3 17l6-6 4 4 8-8" stroke="#fff" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </span>
+      Trader
+    </a>
+    <nav class="nav-links">
+      <a href="#features">Возможности</a>
+      <a href="#how">Как работает</a>
+      <a href="#tech">Технологии</a>
+    </nav>
+    <div class="nav-actions">
+      <a class="btn btn-ghost" href="/login.html">Войти</a>
+      <a class="btn btn-primary" href="/register.html">Регистрация</a>
+    </div>
+  </div>
+</header>
+
+<!-- ── HERO ─────────────────────────────────────────────── -->
+<section class="hero" style="border-top:none;">
+  <div class="container">
+    <div>
+      <span class="eyebrow"><span class="dot"></span> Форекс · Крипто · Авто-исполнение</span>
+      <h1 class="hero-title">Алгоритмическая торговля <span class="accent">нового уровня</span></h1>
+      <p class="hero-sub">
+        Trader автоматически находит входы по стратегии «Слом» на форекс и крипто, рассчитывает
+        риск и цели, ставит отложенные ордера и присылает уведомления в Telegram — а при желании
+        исполняет сделки сам в MetaTrader&nbsp;5 и на ByBit.
+      </p>
+      <div class="hero-cta">
+        <a class="btn btn-primary btn-lg" href="/login.html">Войти в сканер</a>
+        <a class="btn btn-ghost btn-lg" href="#features">Смотреть возможности</a>
+      </div>
+      <div class="hero-meta">
+        <span><b>R:R ≥ 2:1</b> — фильтр входов</span>
+        <span><b>7</b> источников котировок</span>
+        <span><b>H1 → M30</b> мультитаймфрейм</span>
+      </div>
+    </div>
+
+    <div class="hero-card" aria-hidden="true">
+      <div class="hc-head">
+        <span class="hc-pair">EUR/USD · M30</span>
+        <span class="hc-tag">Паттерн «Слом» ↑</span>
+      </div>
+      <div class="hc-price">1.0865<small>+0.42%</small></div>
+      <svg class="hc-chart" viewBox="0 0 320 150" preserveAspectRatio="none">
+        <defs>
+          <linearGradient id="fill" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stop-color="#2962ff" stop-opacity="0.28"/>
+            <stop offset="100%" stop-color="#2962ff" stop-opacity="0"/>
+          </linearGradient>
+        </defs>
+        <!-- take / entry / stop guide lines -->
+        <line x1="0" y1="34"  x2="320" y2="34"  stroke="#26a69a" stroke-width="1" stroke-dasharray="4 4" opacity="0.55"/>
+        <line x1="0" y1="82"  x2="320" y2="82"  stroke="#2962ff" stroke-width="1" stroke-dasharray="4 4" opacity="0.6"/>
+        <line x1="0" y1="118" x2="320" y2="118" stroke="#ef5350" stroke-width="1" stroke-dasharray="4 4" opacity="0.55"/>
+        <path d="M0 108 L36 96 L72 112 L108 88 L144 100 L180 82 L216 66 L252 74 L288 50 L320 40"
+              fill="none" stroke="#2962ff" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/>
+        <path d="M0 108 L36 96 L72 112 L108 88 L144 100 L180 82 L216 66 L252 74 L288 50 L320 40 L320 150 L0 150 Z" fill="url(#fill)"/>
+      </svg>
+      <div class="hc-levels">
+        <div class="lvl take"><div class="k">Take</div><div class="v">1.0921</div></div>
+        <div class="lvl entry"><div class="k">Entry</div><div class="v">1.0865</div></div>
+        <div class="lvl stop"><div class="k">Stop</div><div class="v">1.0838</div></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ── FEATURES ─────────────────────────────────────────── -->
+<section id="features">
+  <div class="container">
+    <div class="sec-head reveal">
+      <div class="sec-kicker">Возможности</div>
+      <h2>Всё для системной торговли — в одном сервисе</h2>
+      <p>От поиска паттерна до исполнения ордера и разбора итогов дня. Форекс и крипто в едином контуре.</p>
+    </div>
+    <div class="features">
+
+      <div class="card reveal">
+        <div class="ico">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none"><path d="M3 17l5-5 4 4 8-9" stroke="#2962ff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/><circle cx="8" cy="12" r="1.6" fill="#2962ff"/><circle cx="12" cy="16" r="1.6" fill="#2962ff"/></svg>
+        </div>
+        <h3>Сканер стратегии «Слом»</h3>
+        <p>Мультитаймфрейм-анализ: тренд по H1, ключевые уровни и паттерн «Слом» (импульс → коррекция → новый импульс) на M30. Автоскан вотчлиста по расписанию МСК с фильтром R:R ≥ 2:1.</p>
+        <div class="tags"><span class="chip">H1 → M30</span><span class="chip">Расписание МСК</span><span class="chip">Уровни</span></div>
+      </div>
+
+      <div class="card g reveal">
+        <div class="ico">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none"><path d="M4 7c0-1.7 3.6-3 8-3s8 1.3 8 3-3.6 3-8 3-8-1.3-8-3z" stroke="#26a69a" stroke-width="2" stroke-linecap="round"/><path d="M4 7v10c0 1.7 3.6 3 8 3s8-1.3 8-3V7" stroke="#26a69a" stroke-width="2" stroke-linecap="round"/><path d="M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3" stroke="#26a69a" stroke-width="2" stroke-linecap="round"/></svg>
+        </div>
+        <h3>Множество источников данных</h3>
+        <p>Котировки из семи провайдеров — переключение под инструмент, лимиты и регион. Свечи кэшируются локально для быстрого повторного анализа.</p>
+        <div class="tags"><span class="chip">TwelveData</span><span class="chip">Polygon</span><span class="chip">OANDA</span><span class="chip">Finnhub</span><span class="chip">+3</span></div>
+      </div>
+
+      <div class="card reveal">
+        <div class="ico">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none"><path d="M12 3v18M5 8l7-5 7 5" stroke="#2962ff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><path d="M5 16l7 5 7-5" stroke="#2962ff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </div>
+        <h3>Отложенные ордера и риск-менеджмент</h3>
+        <p>Авто-выставление limit/stop-ордеров с расчётом объёма от депозита и процента риска. Дедуп повторов, фильтр «слишком близко к рынку» и отмена устаревших ордеров.</p>
+        <div class="tags"><span class="chip">Limit / Stop</span><span class="chip">Sizing по риску</span><span class="chip">Дедуп</span></div>
+      </div>
+
+      <div class="card o reveal">
+        <div class="ico">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none"><path d="M13 2L3 14h7l-1 8 10-12h-7l1-8z" stroke="#ff9800" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </div>
+        <h3>Авто-исполнение в MetaTrader 5</h3>
+        <p>Отдельный executor на Windows/MT5 принимает сигналы и открывает сделки без ручного ввода. Авто-трейдинг — опция: можно оставить только сигналы и уведомления.</p>
+        <div class="tags"><span class="chip">MetaTrader 5</span><span class="chip">AUTO_TRADE</span><span class="chip">Market + Pending</span></div>
+      </div>
+
+      <div class="card o reveal">
+        <div class="ico">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="9" stroke="#ff9800" stroke-width="2"/><path d="M8 12l2.5 2.5L16 9" stroke="#ff9800" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </div>
+        <h3>Крипто-канал ByBit</h3>
+        <p>Приём сигналов из Telegram-каналов, парсинг (regex + LLM-фолбэк) и исполнение на ByBit USDT-perpetual: плечо, множественные тейки, стоп и контроль дрифта цены.</p>
+        <div class="tags"><span class="chip">Telegram</span><span class="chip">ByBit V5</span><span class="chip">USDT-perp</span></div>
+      </div>
+
+      <div class="card reveal">
+        <div class="ico">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none"><path d="M12 3a4 4 0 0 1 4 4c1.7.6 3 2.2 3 4.2 0 1.2-.5 2.3-1.3 3.1.2.5.3 1 .3 1.7a4 4 0 0 1-4 4c-.7 0-1.4-.2-2-.5-.6.3-1.3.5-2 .5a4 4 0 0 1-4-4c0-.6.1-1.2.3-1.7A4.3 4.3 0 0 1 5 11.2C5 9.2 6.3 7.6 8 7a4 4 0 0 1 4-4z" stroke="#2962ff" stroke-width="1.8" stroke-linejoin="round"/></svg>
+        </div>
+        <h3>LLM-аналитика на Claude</h3>
+        <p>Ежедневный AI-агент разбирает историю сделок и предлагает правки конфигурации (вы подтверждаете), а чат-ассистент отвечает по стратегии. Все LLM-вызовы трассируются в Langfuse.</p>
+        <div class="tags"><span class="chip">Claude</span><span class="chip">AI-агент</span><span class="chip">Langfuse</span></div>
+      </div>
+
+      <div class="card g reveal">
+        <div class="ico">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none"><path d="M4 5h16v11H7l-3 3V5z" stroke="#26a69a" stroke-width="2" stroke-linejoin="round"/><path d="M8 9h8M8 12h5" stroke="#26a69a" stroke-width="2" stroke-linecap="round"/></svg>
+        </div>
+        <h3>Уведомления и отчёты в Telegram</h3>
+        <p>Мгновенные алерты по новым входам, открытию и закрытию ордеров, исполнению отложек — и ежедневный отчёт с итогами торгового дня в заданный час.</p>
+        <div class="tags"><span class="chip">Алерты</span><span class="chip">Ежедневный отчёт</span></div>
+      </div>
+
+      <div class="card g reveal">
+        <div class="ico">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none"><rect x="4" y="3" width="16" height="18" rx="2" stroke="#26a69a" stroke-width="2"/><path d="M8 8h8M8 12h8M8 16h5" stroke="#26a69a" stroke-width="2" stroke-linecap="round"/></svg>
+        </div>
+        <h3>Журнал найденных входов</h3>
+        <p>Durable-история каждого сигнала с обоснованием по фазам стратегии и итогом ордера. Экспорт в CSV — фундамент для тюнинга порогов и параметров входа.</p>
+        <div class="tags"><span class="chip">Обоснование</span><span class="chip">CSV-экспорт</span></div>
+      </div>
+
+    </div>
+  </div>
+</section>
+
+<!-- ── HOW IT WORKS ─────────────────────────────────────── -->
+<section id="how">
+  <div class="container">
+    <div class="sec-head reveal">
+      <div class="sec-kicker">Как работает</div>
+      <h2>Четыре шага от рынка до ордера</h2>
+      <p>Тот же алгоритм, что вы применяете вручную, — только автоматически и по расписанию.</p>
+    </div>
+    <div class="steps">
+      <div class="step reveal">
+        <div class="num">1</div>
+        <h4>Скан рынка</h4>
+        <p>Сканер обходит вотчлист, тянет свечи H1/M30 и определяет тренд и ключевые уровни.</p>
+        <svg class="arrow" width="26" height="26" viewBox="0 0 24 24" fill="none"><path d="M5 12h14M13 6l6 6-6 6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </div>
+      <div class="step reveal">
+        <div class="num">2</div>
+        <h4>Паттерн «Слом»</h4>
+        <p>На M30 ищутся три сигнала: импульс, коррекция к уровню и новый импульс по тренду H1.</p>
+        <svg class="arrow" width="26" height="26" viewBox="0 0 24 24" fill="none"><path d="M5 12h14M13 6l6 6-6 6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </div>
+      <div class="step reveal">
+        <div class="num">3</div>
+        <h4>Расчёт входа</h4>
+        <p>Считаются вход, стоп за уровнем слома и цель по ближайшему уровню — с проверкой R:R и объёма по риску.</p>
+        <svg class="arrow" width="26" height="26" viewBox="0 0 24 24" fill="none"><path d="M5 12h14M13 6l6 6-6 6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </div>
+      <div class="step reveal">
+        <div class="num">4</div>
+        <h4>Сигнал или ордер</h4>
+        <p>Уведомление в Telegram — и, если включён авто-трейдинг, отложенный ордер в MT5 или сделка на ByBit.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ── TECH ─────────────────────────────────────────────── -->
+<section id="tech">
+  <div class="container">
+    <div class="sec-head reveal">
+      <div class="sec-kicker">Технологии</div>
+      <h2>Надёжный стек под капотом</h2>
+      <p>Микросервисы в Docker, разворачиваются через Dokploy за Traefik.</p>
+    </div>
+    <div class="tech-badges reveal">
+      <span class="badge"><span class="bd" style="background:#26a69a"></span>Node.js — сканер</span>
+      <span class="badge"><span class="bd" style="background:#2962ff"></span>Python · FastAPI</span>
+      <span class="badge"><span class="bd" style="background:#ff9800"></span>MetaTrader 5</span>
+      <span class="badge"><span class="bd" style="background:#26a69a"></span>ByBit V5 API</span>
+      <span class="badge"><span class="bd" style="background:#2962ff"></span>Claude LLM</span>
+      <span class="badge"><span class="bd" style="background:#c084fc"></span>Langfuse</span>
+      <span class="badge"><span class="bd" style="background:#60a5fa"></span>Telegram · Telethon</span>
+      <span class="badge"><span class="bd" style="background:#787b86"></span>Docker · Dokploy</span>
+    </div>
+  </div>
+</section>
+
+<!-- ── CTA BAND ─────────────────────────────────────────── -->
+<section class="cta-band">
+  <div class="container">
+    <div class="cta-inner reveal">
+      <h2>Начните работу со сканером</h2>
+      <p>Войдите в аккаунт или зарегистрируйтесь — и подключите свой вотчлист, источники данных и Telegram за пару минут.</p>
+      <div class="hero-cta">
+        <a class="btn btn-primary btn-lg" href="/login.html">Войти</a>
+        <a class="btn btn-ghost btn-lg" href="/register.html">Регистрация</a>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ── FOOTER ───────────────────────────────────────────── -->
+<footer class="site">
+  <div class="container">
+    <div class="foot">
+      <a class="brand" href="/landing.html">
+        <span class="brand-mark">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none"><path d="M3 17l6-6 4 4 8-8" stroke="#fff" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </span>
+        Trader
+      </a>
+      <nav class="foot-links">
+        <a href="#features">Возможности</a>
+        <a href="#how">Как работает</a>
+        <a href="/login.html">Войти</a>
+        <a href="/register.html">Регистрация</a>
+      </nav>
+    </div>
+    <p class="disclaimer">
+      Trader — инструмент для системной торговли и автоматизации по вашей собственной стратегии.
+      Материалы и сигналы носят информационный характер и не являются индивидуальной инвестиционной
+      рекомендацией. Торговля на финансовых рынках сопряжена с риском потери капитала; решения вы
+      принимаете самостоятельно. © <span id="year">2026</span> Trader · trader.kachestvobiz-ai.ru
+    </p>
+  </div>
+</footer>
+
+<script>
+  // reveal-on-scroll
+  (function () {
+    var els = document.querySelectorAll('.reveal');
+    if (!('IntersectionObserver' in window)) {
+      els.forEach(function (el) { el.classList.add('in'); });
+      return;
+    }
+    var io = new IntersectionObserver(function (entries) {
+      entries.forEach(function (e) {
+        if (e.isIntersecting) { e.target.classList.add('in'); io.unobserve(e.target); }
+      });
+    }, { threshold: 0.12, rootMargin: '0px 0px -40px 0px' });
+    els.forEach(function (el) { io.observe(el); });
+
+    // smooth anchor scroll
+    document.querySelectorAll('a[href^="#"]').forEach(function (a) {
+      a.addEventListener('click', function (ev) {
+        var id = a.getAttribute('href');
+        if (id.length < 2) return;
+        var t = document.querySelector(id);
+        if (!t) return;
+        ev.preventDefault();
+        t.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      });
+    });
+  })();
+</script>
+</body>
+</html>
